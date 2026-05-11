@@ -1,37 +1,54 @@
-# risk_control — 跨境支付制裁筛查
+# risk_control
 
-基于 **CloudWeGo Eino** 编排的服务：把「清洗 → 本地名单粗筛 → AI 初筛 → 条件二验 → 报告 → 审计」拆成图上的多个节点，便于单独替换与观测。
+跨境支付场景下的 **制裁名单筛查**：用 **CloudWeGo Eino** 把「清洗 → 本地粗筛 → AI 初筛 → 条件二验 → 报告 → 审计」编排成可替换、可观测的 Graph；模型走 **DeepSeek**（OpenAI 兼容），数据层可选 **MySQL**。
 
-## 技术栈（简要）
+---
 
-| 模块 | 说明 |
+## 一分钟理解架构
+
+| 层次 | 职责 |
 |------|------|
-| **Eino `compose.Graph`** | 工作流编排：`AddLambdaNode` 定义步骤，`AddEdge` 串联，`AddBranch` 做条件分支。 |
-| **`llm.Router`** | **不是**工作流本身；只负责按任务类型（初筛 / 二验 / 报告）绑定不同的 ChatModel，便于以后换模型、控成本。 |
-| **MySQL（可选）** | `sanctions_entry` 等表：名单粗筛与审计；不配 DSN 时使用内存 Noop，名单查询为空。 |
-| **DeepSeek** | 通过 OpenAI 兼容接口（`eino-ext` OpenAI ChatModel）；未配置 API Key 时用内置 Mock 输出。 |
+| **`workflow/graph.go`** | 真正的业务编排：`compose.NewGraph` + `AddLambdaNode` + `AddEdge` + `AddBranch`。 |
+| **`llm.Router`** | 仅做 **模型路由**（初筛 / 二验 / 报告可绑定不同 `ChatModel`），**不是** Graph 本身。 |
+| **`workflow/observability.go`** | `compose.WithCallbacks`：节点级 **OnStart / OnEnd / OnError**，并把 **节点边（上一节点 → 当前节点）** 与耗时写入 `ScreeningResult.observation`。 |
+| **`store.FlushAudit`** | **仅**将 `audit_log`、`ai_decision` 在同一 **InnoDB 事务**中落库；名单查询不在该事务内。 |
+| **`llm/retry.go`** | 对 LLM `Generate` 做有限次重试 + 指数退避（可重试错误启发式判断）。 |
 
-## 工作流里谁在调 LLM？
+---
 
-并非每一步都调模型。典型路径：
+## 执行路径与 LLM 调用
 
-1. **ingest / normalize / local_candidates** — 规则与 SQL，**不调 LLM**。  
-2. **ai_primary** — **调 LLM**（初筛）。  
-3. **分支**：若初筛建议复核且分数 ≥ 阈值 → **ai_secondary**（**调 LLM**）；否则 **skip_secondary**（不调）。  
-4. **ai_report** — **调 LLM**（生成 Markdown 报告）。  
-5. **persist** — 汇总写审计，**不调 LLM**。
+```text
+START → ingest → normalize → local_candidates → ai_primary ─┬→ ai_secondary ─┐
+                                                             └→ skip_secondary ┘
+                                                                        ↓
+                                                                  ai_report → persist → END
+```
 
-## 配置
+- **不调 LLM**：`ingest`、`normalize`、`local_candidates`、`persist`。  
+- **调 LLM**：`ai_primary`、`ai_report`；**`ai_secondary` 仅当**初筛 `needs_secondary_review` 且 `risk_score ≥ primaryRiskScore`（默认阈值见配置）。  
+- **优雅降级**：`ai_secondary` 在超时、解析失败等情况下 **不中断整条流水线**，写入 `secondary.technical_degraded=true`，分数回退初筛，报告与审计照常生成。
 
-从**进程当前工作目录**读取 `config.json`（请在项目根目录启动服务）。主要字段示例：
+---
 
-- `httpaddr`：监听地址，如 `:8080`  
-- `mysqldsn`：MySQL DSN；留空则不做本地名单与持久化  
-- `deepseekapikey` / `deepseekbaseurl` / `modelprimary` / `modelverify` / `modelreport`  
-- `llmtimeout`：LLM  HTTP 超时（配置里为数字，具体含义以 `config/config.go` 中 `Load` 的换算为准）  
-- `sysprompt` / `userprompt` / `verifyprompt` / `reportprompt`：可按需在代码中与 `llm/prompts.go` 联动扩展  
+## 配置（`config.json`）
 
-**勿将真实 API Key 提交到公开仓库**；生产环境建议用私密配置或密钥管理。
+在**项目根目录**启动进程，配置在 `init` 中读取一次（见 `config/config.go`）。
+
+| JSON 字段 | 说明 |
+|-----------|------|
+| `httpaddr` | HTTP 监听，如 `:8080` |
+| `mysqldsn` | MySQL DSN；空则 `Noop`（无名单、无持久化） |
+| `deepSeekAPIKey` / `deepSeekBaseURL` | DeepSeek；无 Key 时使用内置 Mock |
+| `modelPrimary` / `modelVerify` / `modelReport` | 各阶段模型名 |
+| `llmTimeout` | LLM 超时，加载逻辑见 `config` 包（与 `time.Second` 合成） |
+| `primaryRiskScore` | 进入二验的初筛分数下限；≤0 时图内使用默认 `0.55` |
+| `workers` | `/v1/screen/batch` 并发 worker 数 |
+| `sysPrompt` / `userPrompt` / `verifyPrompt` / `reportPrompt` | 与 `llm/prompts.go` 联动 |
+
+勿将 **API Key** 提交到公开仓库；生产请用密钥管理或环境注入。
+
+---
 
 ## 运行
 
@@ -41,17 +58,18 @@ go build -o demo .
 ./demo
 ```
 
-Windows：`demo.exe`。
 
-## HTTP 接口
+---
 
-| 方法 | 路径 | 说明 |
+## HTTP API
+
+| 方法 | 路径 | Body |
 |------|------|------|
-| GET | `/health` | 健康检查 |
-| POST | `/v1/screen` | 单笔筛查，Body 为 JSON（见 `domain.ScreeningRequest`） |
-| POST | `/v1/screen/batch` | 批量筛查，Body 为请求数组 |
+| `GET` | `/health` | — |
+| `POST` | `/v1/screen` | 单笔 `tools.ScreeningRequest` JSON |
+| `POST` | `/v1/screen/batch` | `ScreeningRequest` 的 JSON **数组** |
 
-**单笔请求示例：**
+单笔示例：
 
 ```json
 {
@@ -67,19 +85,30 @@ Windows：`demo.exe`。
 
 `transaction_id` 可省略，服务会自动生成。
 
-## 目录结构（示意）
+响应 `tools.ScreeningResult` 除分数、等级、初筛/二验、报告外，可能包含：
 
-```
+- **`observation`**：本次 Invoke 的节点跨度与 **边列表**（便于画实际执行路径）。  
+- **`persisted_audit_rows`**：本次写入审计相关表的行数（批量步骤 + AI 决策 + 快照）。
+
+---
+
+## 目录说明
+
+```text
 risk_control/
-├── main.go           # HTTP 入口，编译 Graph 并 Invoke
-├── config/           # 读取 config.json
-├── domain/           # 请求/状态/结果类型
-├── workflow/graph.go # Eino Graph 编排
-├── llm/              # Router、Prompt、Mock
-├── store/            # MySQL / Noop
-└── batch/            # 批量并发调用封装
+├── main.go                 # HTTP、组装 Store / Router / Graph
+├── config/                 # config.json（init 加载）
+├── tools/                  # 领域类型：请求/状态/结果、审计缓冲、标准化
+├── workflow/
+│   ├── graph.go            # Eino Graph 编排
+│   └── observability.go  # WithRunTrace + WithCallbacks 观测
+├── llm/                    # Router、Prompt、Retry、Mock
+├── store/                  # MySQL + Noop；FlushAudit 事务写审计表
+└── batch/                  # 批量筛查（并发 + 统一 Invoke Option）
 ```
 
-## 说明
+---
 
-本仓库名单数据与风控策略皆为测试数据，不代表任何正式合规结论；上线前需独立法务与风控评审。
+## 免责声明
+
+仓库内名单与策略均为 **演示用途**，不构成任何正式合规结论；上线前须经过法务与风控独立评审。
