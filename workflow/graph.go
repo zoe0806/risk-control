@@ -93,7 +93,7 @@ func BuildScreeningGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 	if err := g.AddLambdaNode(nodeAIPrimary, compose.InvokableLambda(func(ctx context.Context, st *domain.PipelineState) (*domain.PipelineState, error) {
 		t0 := time.Now()
 		msgs := llm.PrimaryMessages(st, deps.Cfg)
-		out, err := llm.GenerateWithRetry(ctx, deps.Router.For(llm.TaskSanctionsPrimary), msgs, retryCfg)
+		out, err := llm.GenerateWithRetry(ctx, deps.Router.For(domain.TaskSanctionsPrimary), msgs, retryCfg)
 		if err != nil {
 			return nil, err
 		}
@@ -105,7 +105,7 @@ func BuildScreeningGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 		pr.RawModelOutput = raw
 		st.Primary = &pr
 		recordStep(st, nodeAIPrimary, t0)
-		st.Audit.AddDecision(string(llm.TaskSanctionsPrimary), deps.Router.ModelName(llm.TaskSanctionsPrimary),
+		st.Audit.AddDecision(string(domain.TaskSanctionsPrimary), deps.Router.ModelName(domain.TaskSanctionsPrimary),
 			truncSummary(msgs), raw, time.Since(t0).Milliseconds())
 		return st, nil
 	}), compose.WithNodeName(nodeAIPrimary)); err != nil {
@@ -115,7 +115,7 @@ func BuildScreeningGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 	if err := g.AddLambdaNode(nodeAISecondary, compose.InvokableLambda(func(ctx context.Context, st *domain.PipelineState) (*domain.PipelineState, error) {
 		t0 := time.Now()
 		msgs := llm.VerifyMessages(st, deps.Cfg)
-		out, err := llm.GenerateWithRetry(ctx, deps.Router.For(llm.TaskSanctionsVerify), msgs, retryCfg)
+		out, err := llm.GenerateWithRetry(ctx, deps.Router.For(domain.TaskSanctionsVerify), msgs, retryCfg)
 		if err != nil {
 			st.Secondary = degradedSecondary(st, err)
 			recordStep(st, nodeAISecondary, t0)
@@ -139,7 +139,7 @@ func BuildScreeningGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 		sec.RawModelOutput = raw
 		st.Secondary = &sec
 		recordStep(st, nodeAISecondary, t0)
-		st.Audit.AddDecision(string(llm.TaskSanctionsVerify), deps.Router.ModelName(llm.TaskSanctionsVerify),
+		st.Audit.AddDecision(string(domain.TaskSanctionsVerify), deps.Router.ModelName(domain.TaskSanctionsVerify),
 			truncSummary(msgs), raw, time.Since(t0).Milliseconds())
 		return st, nil
 	}), compose.WithNodeName(nodeAISecondary)); err != nil {
@@ -149,11 +149,11 @@ func BuildScreeningGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 	if err := g.AddLambdaNode(nodeSkipSecondary, compose.InvokableLambda(func(ctx context.Context, st *domain.PipelineState) (*domain.PipelineState, error) {
 		t0 := time.Now()
 		st.Secondary = &domain.SecondaryAssessment{
-			Skipped:             true,
-			Confirmed:           false,
-			FinalRiskScore:      st.Primary.RiskScore,
-			Rationale:           "未达到二次模型触发阈值，跳过二验。",
-			TechnicalDegraded:   false,
+			Skipped:           true,
+			Confirmed:         false,
+			FinalRiskScore:    st.Primary.RiskScore,
+			Rationale:         "未达到二次模型触发阈值，跳过二验。",
+			TechnicalDegraded: false,
 		}
 		recordStep(st, nodeSkipSecondary, t0)
 		return st, nil
@@ -164,13 +164,13 @@ func BuildScreeningGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 	if err := g.AddLambdaNode(nodeAIReport, compose.InvokableLambda(func(ctx context.Context, st *domain.PipelineState) (*domain.PipelineState, error) {
 		t0 := time.Now()
 		msgs := llm.ReportMessages(st, deps.Cfg)
-		out, err := llm.GenerateWithRetry(ctx, deps.Router.For(llm.TaskReport), msgs, retryCfg)
+		out, err := llm.GenerateWithRetry(ctx, deps.Router.For(domain.TaskReport), msgs, retryCfg)
 		if err != nil {
 			return nil, err
 		}
 		st.ReportMarkdown = out.Content
 		recordStep(st, nodeAIReport, t0)
-		st.Audit.AddDecision(string(llm.TaskReport), deps.Router.ModelName(llm.TaskReport),
+		st.Audit.AddDecision(string(domain.TaskReport), deps.Router.ModelName(domain.TaskReport),
 			truncSummary(msgs), out.Content, time.Since(t0).Milliseconds())
 		return st, nil
 	}), compose.WithNodeName(nodeAIReport)); err != nil {
@@ -230,12 +230,12 @@ func degradedSecondary(st *domain.PipelineState, cause error) *domain.SecondaryA
 		base = st.Primary.RiskScore
 	}
 	return &domain.SecondaryAssessment{
-		Skipped:             true,
-		Confirmed:           false,
-		FinalRiskScore:      base,
-		Rationale:           "因技术原因，未经 AI 二次验证；已降级为仅初筛结果，请人工复核。",
-		TechnicalDegraded:   true,
-		RawModelOutput:      "",
+		Skipped:           true,
+		Confirmed:         false,
+		FinalRiskScore:    base,
+		Rationale:         "因技术原因，未经 AI 二次验证；已降级为仅初筛结果，请人工复核。",
+		TechnicalDegraded: true,
+		RawModelOutput:    "",
 	}
 }
 

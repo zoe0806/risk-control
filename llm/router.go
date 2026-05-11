@@ -8,6 +8,7 @@ import (
 	"github.com/cloudwego/eino/components/model"
 
 	"risk_control/config"
+	"risk_control/domain"
 )
 
 // Router 将业务任务映射到具体 ChatModel，便于独立替换与成本控制。
@@ -24,7 +25,7 @@ type Router struct {
 // 多模型分层/模型路由，根据配置创建模型实例，并通过Router.For方法根据任务类型选择对应模型
 func NewRouter(ctx context.Context, cfg config.Config) (*Router, error) {
 	if cfg.DeepSeekAPIKey == "" {
-		return newMockRouter(), nil
+		return nil, fmt.Errorf("ai model api key is empty")
 	}
 	base := cfg.DeepSeekBaseURL
 	timeout := cfg.LLMTimeout
@@ -60,22 +61,22 @@ func NewRouter(ctx context.Context, cfg config.Config) (*Router, error) {
 }
 
 // For 返回任务对应模型（强类型路由入口）。
-func (rt *Router) For(t Task) model.BaseChatModel {
+func (rt *Router) For(t domain.Task) model.BaseChatModel {
 	switch t {
-	case TaskSanctionsVerify:
+	case domain.TaskSanctionsVerify:
 		return rt.verify
-	case TaskReport:
+	case domain.TaskReport:
 		return rt.report
 	default:
 		return rt.primary
 	}
 }
 
-func (rt *Router) ModelName(t Task) string {
+func (rt *Router) ModelName(t domain.Task) string {
 	switch t {
-	case TaskSanctionsVerify:
+	case domain.TaskSanctionsVerify:
 		return rt.verifyModelName
-	case TaskReport:
+	case domain.TaskReport:
 		return rt.reportModelName
 	default:
 		return rt.primaryModelName

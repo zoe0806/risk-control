@@ -5,8 +5,8 @@ import "time"
 // ScreeningRequest 单笔跨境交易对手筛查请求（演示用最小字段集）。
 type ScreeningRequest struct {
 	TransactionID   string `json:"transaction_id"`
-	Counterparty    string `json:"counterparty"`    // 名称，可多语言
-	Country         string `json:"country"`         // ISO2 或文本
+	Counterparty    string `json:"counterparty"` // 名称，可多语言
+	Country         string `json:"country"`      // ISO2 或文本
 	BankName        string `json:"bank_name,omitempty"`
 	PaymentPurpose  string `json:"payment_purpose,omitempty"`
 	AmountMinorUnit int64  `json:"amount_minor_unit,omitempty"`
@@ -32,28 +32,28 @@ type SanctionCandidate struct {
 
 // PrimaryAssessment AI 初筛结构化结果。
 type PrimaryAssessment struct {
-	RiskScore           float64  `json:"risk_score"`
-	MatchedNames        []string `json:"matched_names"`
-	Rationale           string   `json:"rationale"`
-	NeedsSecondaryReview bool    `json:"needs_secondary_review"`
-	RawModelOutput      string   `json:"raw_model_output,omitempty"`
+	RiskScore            float64  `json:"risk_score"`
+	MatchedNames         []string `json:"matched_names"`
+	Rationale            string   `json:"rationale"`
+	NeedsSecondaryReview bool     `json:"needs_secondary_review"`
+	RawModelOutput       string   `json:"raw_model_output,omitempty"`
 }
 
 // SecondaryAssessment 高风险二次验证结果。
 type SecondaryAssessment struct {
-	Confirmed       bool    `json:"confirmed"`
-	FinalRiskScore  float64 `json:"final_risk_score"`
-	Rationale       string  `json:"rationale"`
-	RawModelOutput  string  `json:"raw_model_output,omitempty"`
-	Skipped         bool    `json:"skipped"`
+	Confirmed      bool    `json:"confirmed"`
+	FinalRiskScore float64 `json:"final_risk_score"`
+	Rationale      string  `json:"rationale"`
+	RawModelOutput string  `json:"raw_model_output,omitempty"`
+	Skipped        bool    `json:"skipped"`
 	// TechnicalDegraded 为 true 表示二验因超时/解析错误等技术原因未完成，未做 AI 二次验证（业务上区别于「规则跳过」）。
 	TechnicalDegraded bool `json:"technical_degraded,omitempty"`
 }
 
 // AuditBuffer 流水线内累积的审计条目，仅在 persist 时一次性事务写入。
 type AuditBuffer struct {
-	Steps     []AuditStepDraft     `json:"-"`
-	Decisions []AIDecisionDraft    `json:"-"`
+	Steps     []AuditStepDraft  `json:"-"`
+	Decisions []AIDecisionDraft `json:"-"`
 }
 
 // AuditStepDraft 审计步骤草稿。
@@ -97,8 +97,8 @@ type EdgeObservation struct {
 type PipelineState struct {
 	TraceID string `json:"trace_id"`
 
-	Request   ScreeningRequest    `json:"request"`
-	Party     *NormalizedParty    `json:"party,omitempty"`
+	Request    ScreeningRequest    `json:"request"`
+	Party      *NormalizedParty    `json:"party,omitempty"`
 	Candidates []SanctionCandidate `json:"candidates,omitempty"`
 
 	Primary   *PrimaryAssessment   `json:"primary,omitempty"`
@@ -113,15 +113,24 @@ type PipelineState struct {
 
 // ScreeningResult 对外返回与持久化摘要。
 type ScreeningResult struct {
-	TraceID            string    `json:"trace_id"`
-	TransactionID      string    `json:"transaction_id"`
-	FinalRiskScore     float64   `json:"final_risk_score"`
-	Level              string    `json:"level"` // LOW / MEDIUM / HIGH
+	TraceID            string               `json:"trace_id"`
+	TransactionID      string               `json:"transaction_id"`
+	FinalRiskScore     float64              `json:"final_risk_score"`
+	Level              string               `json:"level"` // LOW / MEDIUM / HIGH
 	Primary            *PrimaryAssessment   `json:"primary,omitempty"`
 	Secondary          *SecondaryAssessment `json:"secondary,omitempty"`
-	ReportMarkdown     string    `json:"report_markdown"`
-	TotalDurationMs    int64     `json:"total_duration_ms"`
-	PersistedAuditRows int       `json:"persisted_audit_rows"`
+	ReportMarkdown     string               `json:"report_markdown"`
+	TotalDurationMs    int64                `json:"total_duration_ms"`
+	PersistedAuditRows int                  `json:"persisted_audit_rows"`
 
 	Observation *GraphObservation `json:"observation,omitempty"`
 }
+
+// Task 用于模型分层路由：未来可将轻量任务映射到更便宜模型。
+type Task string
+
+const (
+	TaskSanctionsPrimary Task = "sanctions_primary"
+	TaskSanctionsVerify  Task = "sanctions_verify"
+	TaskReport           Task = "sanctions_report"
+)
