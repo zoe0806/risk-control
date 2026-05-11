@@ -35,19 +35,6 @@ START → ingest → normalize → local_candidates → ai_primary ─┬→ ai_
 
 在**项目根目录**启动进程，配置在 `init` 中读取一次（见 `config/config.go`）。
 
-| JSON 字段 | 说明 |
-|-----------|------|
-| `httpaddr` | HTTP 监听，如 `:8080` |
-| `mysqldsn` | MySQL DSN；空则 `Noop`（无名单、无持久化） |
-| `deepSeekAPIKey` / `deepSeekBaseURL` | DeepSeek；无 Key 时使用内置 Mock |
-| `modelPrimary` / `modelVerify` / `modelReport` | 各阶段模型名 |
-| `llmTimeout` | LLM 超时，加载逻辑见 `config` 包（与 `time.Second` 合成） |
-| `primaryRiskScore` | 进入二验的初筛分数下限；≤0 时图内使用默认 `0.55` |
-| `workers` | `/v1/screen/batch` 并发 worker 数 |
-| `sysPrompt` / `userPrompt` / `verifyPrompt` / `reportPrompt` | 与 `llm/prompts.go` 联动 |
-
-勿将 **API Key** 提交到公开仓库；生产请用密钥管理或环境注入。
-
 ---
 
 ## 运行
