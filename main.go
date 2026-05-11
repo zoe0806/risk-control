@@ -11,9 +11,9 @@ import (
 
 	"risk_control/batch"
 	"risk_control/config"
-	"risk_control/domain"
 	"risk_control/llm"
 	"risk_control/store"
+	"risk_control/tools"
 	"risk_control/workflow"
 )
 
@@ -61,7 +61,7 @@ func main() {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
 		}
-		var req domain.ScreeningRequest
+		var req tools.ScreeningRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -82,7 +82,7 @@ func main() {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
 		}
-		var reqs []domain.ScreeningRequest
+		var reqs []tools.ScreeningRequest
 		if err := json.NewDecoder(r.Body).Decode(&reqs); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -90,8 +90,8 @@ func main() {
 		t0 := time.Now()
 		results, errs := batch.ScreenConcurrent(r.Context(), run, reqs, workflow.InvokeScreeningOptions()...)
 		type row struct {
-			Result domain.ScreeningResult `json:"result,omitempty"`
-			Error  string                 `json:"error,omitempty"`
+			Result tools.ScreeningResult `json:"result,omitempty"`
+			Error  string                `json:"error,omitempty"`
 		}
 		out := make([]row, len(reqs))
 		for i := range reqs {

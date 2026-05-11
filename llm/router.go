@@ -8,7 +8,7 @@ import (
 	"github.com/cloudwego/eino/components/model"
 
 	"risk_control/config"
-	"risk_control/domain"
+	"risk_control/tools"
 )
 
 // Router 将业务任务映射到具体 ChatModel，便于独立替换与成本控制。
@@ -61,22 +61,22 @@ func NewRouter(ctx context.Context, cfg config.Config) (*Router, error) {
 }
 
 // For 返回任务对应模型（强类型路由入口）。
-func (rt *Router) For(t domain.Task) model.BaseChatModel {
+func (rt *Router) For(t tools.Task) model.BaseChatModel {
 	switch t {
-	case domain.TaskSanctionsVerify:
+	case tools.TaskSanctionsVerify:
 		return rt.verify
-	case domain.TaskReport:
+	case tools.TaskReport:
 		return rt.report
 	default:
 		return rt.primary
 	}
 }
 
-func (rt *Router) ModelName(t domain.Task) string {
+func (rt *Router) ModelName(t tools.Task) string {
 	switch t {
-	case domain.TaskSanctionsVerify:
+	case tools.TaskSanctionsVerify:
 		return rt.verifyModelName
-	case domain.TaskReport:
+	case tools.TaskReport:
 		return rt.reportModelName
 	default:
 		return rt.primaryModelName

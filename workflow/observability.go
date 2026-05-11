@@ -10,7 +10,7 @@ import (
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/compose"
 
-	"risk_control/domain"
+	"risk_control/tools"
 )
 
 // runTraceKey 将一次 Invoke 的观测数据挂在 context 上，供 persist 合并进 ScreeningResult。
@@ -20,8 +20,8 @@ type runTraceKey struct{}
 type RunTrace struct {
 	mu    sync.Mutex
 	last  string
-	Spans []domain.NodeSpanObservation
-	Edges []domain.EdgeObservation
+	Spans []tools.NodeSpanObservation
+	Edges []tools.EdgeObservation
 }
 
 type spanStartKey struct{}
@@ -39,15 +39,15 @@ func ExportFromContext(ctx context.Context) *RunTrace {
 }
 
 // ToObservation 拷贝为 API 可返回结构。
-func (tr *RunTrace) ToObservation() *domain.GraphObservation {
+func (tr *RunTrace) ToObservation() *tools.GraphObservation {
 	if tr == nil {
 		return nil
 	}
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
-	out := &domain.GraphObservation{
-		NodeSpans: append([]domain.NodeSpanObservation(nil), tr.Spans...),
-		Edges:     append([]domain.EdgeObservation(nil), tr.Edges...),
+	out := &tools.GraphObservation{
+		NodeSpans: append([]tools.NodeSpanObservation(nil), tr.Spans...),
+		Edges:     append([]tools.EdgeObservation(nil), tr.Edges...),
 	}
 	return out
 }
@@ -71,7 +71,7 @@ func GraphInvokeCallbacks() callbacks.Handler {
 			tr.mu.Lock()
 			from := tr.last
 			if from != "" && from != name {
-				tr.Edges = append(tr.Edges, domain.EdgeObservation{From: from, To: name})
+				tr.Edges = append(tr.Edges, tools.EdgeObservation{From: from, To: name})
 			}
 			tr.last = name
 			tr.mu.Unlock()
@@ -94,7 +94,7 @@ func GraphInvokeCallbacks() callbacks.Handler {
 			if !ok || tr == nil {
 				return ctx
 			}
-			span := domain.NodeSpanObservation{
+			span := tools.NodeSpanObservation{
 				Node:       name,
 				Component:  string(info.Component),
 				Type:       info.Type,
@@ -124,7 +124,7 @@ func GraphInvokeCallbacks() callbacks.Handler {
 				return ctx
 			}
 			tr.mu.Lock()
-			tr.Spans = append(tr.Spans, domain.NodeSpanObservation{
+			tr.Spans = append(tr.Spans, tools.NodeSpanObservation{
 				Node:      name,
 				Component: safeComponent(info),
 				Type:      safeType(info),

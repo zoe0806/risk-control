@@ -1,4 +1,4 @@
-package domain
+package tools
 
 func (b *AuditBuffer) AddStep(stepName, detailJSON string, latencyMs int64) {
 	if b == nil {

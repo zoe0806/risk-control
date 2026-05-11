@@ -9,7 +9,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 
-	"risk_control/domain"
+	"risk_control/tools"
 )
 
 // MySQL 使用 InnoDB 与显式事务（调用方可在外层 BeginTx）。
@@ -119,7 +119,7 @@ func (m *MySQL) seedDemo(ctx context.Context) error {
 	return tx.Commit()
 }
 
-func (m *MySQL) SearchSanctions(ctx context.Context, party *domain.NormalizedParty, limit int) ([]domain.SanctionCandidate, error) {
+func (m *MySQL) SearchSanctions(ctx context.Context, party *tools.NormalizedParty, limit int) ([]tools.SanctionCandidate, error) {
 	if limit <= 0 {
 		limit = 32
 	}
@@ -148,9 +148,9 @@ func (m *MySQL) SearchSanctions(ctx context.Context, party *domain.NormalizedPar
 	}
 	defer rows.Close()
 
-	var out []domain.SanctionCandidate
+	var out []tools.SanctionCandidate
 	for rows.Next() {
-		var c domain.SanctionCandidate
+		var c tools.SanctionCandidate
 		if err := rows.Scan(&c.ID, &c.ListCode, &c.NameOriginal, &c.NameNormalized); err != nil {
 			return nil, err
 		}
@@ -177,7 +177,7 @@ func (m *MySQL) InsertAIDecision(ctx context.Context, traceID, task, modelName, 
 }
 
 // FlushAudit 在同一 InnoDB 事务中写入 audit_log 与 ai_decision（名单表不在此事务内）。
-func (m *MySQL) FlushAudit(ctx context.Context, traceID string, buf *domain.AuditBuffer) error {
+func (m *MySQL) FlushAudit(ctx context.Context, traceID string, buf *tools.AuditBuffer) error {
 	if buf == nil {
 		return nil
 	}

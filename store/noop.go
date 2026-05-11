@@ -3,7 +3,7 @@ package store
 import (
 	"context"
 
-	"risk_control/domain"
+	"risk_control/tools"
 )
 
 // Noop 无数据库时的占位实现（审计仅内存侧由调用方日志承接）。
@@ -11,7 +11,7 @@ type Noop struct{}
 
 func (Noop) EnsureSchema(ctx context.Context) error { return nil }
 
-func (Noop) SearchSanctions(ctx context.Context, party *domain.NormalizedParty, limit int) ([]domain.SanctionCandidate, error) {
+func (Noop) SearchSanctions(ctx context.Context, party *tools.NormalizedParty, limit int) ([]tools.SanctionCandidate, error) {
 	return nil, nil
 }
 
@@ -23,7 +23,7 @@ func (Noop) InsertAIDecision(ctx context.Context, traceID, task, modelName, inpu
 	return nil
 }
 
-func (Noop) FlushAudit(ctx context.Context, traceID string, buf *domain.AuditBuffer) error {
+func (Noop) FlushAudit(ctx context.Context, traceID string, buf *tools.AuditBuffer) error {
 	return nil
 }
 

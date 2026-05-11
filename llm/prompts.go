@@ -8,10 +8,10 @@ import (
 	"github.com/cloudwego/eino/schema"
 
 	"risk_control/config"
-	"risk_control/domain"
+	"risk_control/tools"
 )
 
-func PrimaryMessages(st *domain.PipelineState, cfg config.Config) []*schema.Message {
+func PrimaryMessages(st *tools.PipelineState, cfg config.Config) []*schema.Message {
 	candJSON, _ := json.Marshal(st.Candidates)
 	sys := cfg.SysPrompt
 	user := fmt.Sprintf(cfg.UserPrompt, st.Request.Counterparty, st.Request.Country, st.Request.BankName, st.Request.PaymentPurpose, st.Party.NormalizedKey, string(candJSON))
@@ -21,7 +21,7 @@ func PrimaryMessages(st *domain.PipelineState, cfg config.Config) []*schema.Mess
 	}
 }
 
-func VerifyMessages(st *domain.PipelineState, cfg config.Config) []*schema.Message {
+func VerifyMessages(st *tools.PipelineState, cfg config.Config) []*schema.Message {
 	pj, _ := json.Marshal(st.Primary)
 	sys := cfg.VerifyPrompt
 	user := fmt.Sprintf(`初筛结果: %s
@@ -33,7 +33,7 @@ func VerifyMessages(st *domain.PipelineState, cfg config.Config) []*schema.Messa
 	}
 }
 
-func ReportMessages(st *domain.PipelineState, cfg config.Config) []*schema.Message {
+func ReportMessages(st *tools.PipelineState, cfg config.Config) []*schema.Message {
 	sys := cfg.ReportPrompt
 	sec := "（未触发二次模型）"
 	switch {

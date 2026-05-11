@@ -10,9 +10,9 @@ import (
 	"github.com/google/uuid"
 
 	"risk_control/config"
-	"risk_control/domain"
 	"risk_control/llm"
 	"risk_control/store"
+	"risk_control/tools"
 )
 
 const (
@@ -41,39 +41,39 @@ func primaryRiskThreshold(cfg config.Config) float64 {
 }
 
 // BuildScreeningGraph 制裁筛查多步编排：清洗 → 本地候选 → AI 初筛 → 条件二验 → 报告 → 审计。
-func BuildScreeningGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable[domain.ScreeningRequest, domain.ScreeningResult], error) {
+func BuildScreeningGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable[tools.ScreeningRequest, tools.ScreeningResult], error) {
 	if deps == nil || deps.Router == nil || deps.Store == nil {
 		return nil, fmt.Errorf("workflow deps incomplete")
 	}
 	retryCfg := llm.DefaultRetryConfig()
 	thr := primaryRiskThreshold(deps.Cfg)
 
-	g := compose.NewGraph[domain.ScreeningRequest, domain.ScreeningResult]()
+	g := compose.NewGraph[tools.ScreeningRequest, tools.ScreeningResult]()
 
-	if err := g.AddLambdaNode(nodeIngest, compose.InvokableLambda(func(ctx context.Context, in domain.ScreeningRequest) (*domain.PipelineState, error) {
+	if err := g.AddLambdaNode(nodeIngest, compose.InvokableLambda(func(ctx context.Context, in tools.ScreeningRequest) (*tools.PipelineState, error) {
 		if in.TransactionID == "" {
 			in.TransactionID = "txn-demo-" + uuid.New().String()[:8]
 		}
-		return &domain.PipelineState{
+		return &tools.PipelineState{
 			TraceID:     uuid.New().String(),
 			Request:     in,
 			StepTimings: map[string]time.Duration{},
-			Audit:       &domain.AuditBuffer{},
+			Audit:       &tools.AuditBuffer{},
 		}, nil
 	}), compose.WithNodeName(nodeIngest)); err != nil {
 		return nil, err
 	}
 
-	if err := g.AddLambdaNode(nodeNormalize, compose.InvokableLambda(func(ctx context.Context, st *domain.PipelineState) (*domain.PipelineState, error) {
+	if err := g.AddLambdaNode(nodeNormalize, compose.InvokableLambda(func(ctx context.Context, st *tools.PipelineState) (*tools.PipelineState, error) {
 		t0 := time.Now()
-		st.Party = domain.NormalizePartyName(st.Request.Counterparty, st.Request.Country)
+		st.Party = tools.NormalizePartyName(st.Request.Counterparty, st.Request.Country)
 		recordStep(st, nodeNormalize, t0)
 		return st, nil
 	}), compose.WithNodeName(nodeNormalize)); err != nil {
 		return nil, err
 	}
 
-	if err := g.AddLambdaNode(nodeLocalCandidates, compose.InvokableLambda(func(ctx context.Context, st *domain.PipelineState) (*domain.PipelineState, error) {
+	if err := g.AddLambdaNode(nodeLocalCandidates, compose.InvokableLambda(func(ctx context.Context, st *tools.PipelineState) (*tools.PipelineState, error) {
 		t0 := time.Now()
 		hits, err := deps.Store.SearchSanctions(ctx, st.Party, 48)
 		if err != nil {
@@ -90,32 +90,32 @@ func BuildScreeningGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 		return nil, err
 	}
 
-	if err := g.AddLambdaNode(nodeAIPrimary, compose.InvokableLambda(func(ctx context.Context, st *domain.PipelineState) (*domain.PipelineState, error) {
+	if err := g.AddLambdaNode(nodeAIPrimary, compose.InvokableLambda(func(ctx context.Context, st *tools.PipelineState) (*tools.PipelineState, error) {
 		t0 := time.Now()
 		msgs := llm.PrimaryMessages(st, deps.Cfg)
-		out, err := llm.GenerateWithRetry(ctx, deps.Router.For(domain.TaskSanctionsPrimary), msgs, retryCfg)
+		out, err := llm.GenerateWithRetry(ctx, deps.Router.For(tools.TaskSanctionsPrimary), msgs, retryCfg)
 		if err != nil {
 			return nil, err
 		}
 		raw := out.Content
-		var pr domain.PrimaryAssessment
+		var pr tools.PrimaryAssessment
 		if err := json.Unmarshal([]byte(llm.ExtractJSONObject(raw)), &pr); err != nil {
 			return nil, fmt.Errorf("primary json: %w", err)
 		}
 		pr.RawModelOutput = raw
 		st.Primary = &pr
 		recordStep(st, nodeAIPrimary, t0)
-		st.Audit.AddDecision(string(domain.TaskSanctionsPrimary), deps.Router.ModelName(domain.TaskSanctionsPrimary),
+		st.Audit.AddDecision(string(tools.TaskSanctionsPrimary), deps.Router.ModelName(tools.TaskSanctionsPrimary),
 			truncSummary(msgs), raw, time.Since(t0).Milliseconds())
 		return st, nil
 	}), compose.WithNodeName(nodeAIPrimary)); err != nil {
 		return nil, err
 	}
 
-	if err := g.AddLambdaNode(nodeAISecondary, compose.InvokableLambda(func(ctx context.Context, st *domain.PipelineState) (*domain.PipelineState, error) {
+	if err := g.AddLambdaNode(nodeAISecondary, compose.InvokableLambda(func(ctx context.Context, st *tools.PipelineState) (*tools.PipelineState, error) {
 		t0 := time.Now()
 		msgs := llm.VerifyMessages(st, deps.Cfg)
-		out, err := llm.GenerateWithRetry(ctx, deps.Router.For(domain.TaskSanctionsVerify), msgs, retryCfg)
+		out, err := llm.GenerateWithRetry(ctx, deps.Router.For(tools.TaskSanctionsVerify), msgs, retryCfg)
 		if err != nil {
 			st.Secondary = degradedSecondary(st, err)
 			recordStep(st, nodeAISecondary, t0)
@@ -125,7 +125,7 @@ func BuildScreeningGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 			return st, nil
 		}
 		raw := out.Content
-		var sec domain.SecondaryAssessment
+		var sec tools.SecondaryAssessment
 		if err := json.Unmarshal([]byte(llm.ExtractJSONObject(raw)), &sec); err != nil {
 			st.Secondary = degradedSecondary(st, err)
 			recordStep(st, nodeAISecondary, t0)
@@ -139,16 +139,16 @@ func BuildScreeningGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 		sec.RawModelOutput = raw
 		st.Secondary = &sec
 		recordStep(st, nodeAISecondary, t0)
-		st.Audit.AddDecision(string(domain.TaskSanctionsVerify), deps.Router.ModelName(domain.TaskSanctionsVerify),
+		st.Audit.AddDecision(string(tools.TaskSanctionsVerify), deps.Router.ModelName(tools.TaskSanctionsVerify),
 			truncSummary(msgs), raw, time.Since(t0).Milliseconds())
 		return st, nil
 	}), compose.WithNodeName(nodeAISecondary)); err != nil {
 		return nil, err
 	}
 
-	if err := g.AddLambdaNode(nodeSkipSecondary, compose.InvokableLambda(func(ctx context.Context, st *domain.PipelineState) (*domain.PipelineState, error) {
+	if err := g.AddLambdaNode(nodeSkipSecondary, compose.InvokableLambda(func(ctx context.Context, st *tools.PipelineState) (*tools.PipelineState, error) {
 		t0 := time.Now()
-		st.Secondary = &domain.SecondaryAssessment{
+		st.Secondary = &tools.SecondaryAssessment{
 			Skipped:           true,
 			Confirmed:         false,
 			FinalRiskScore:    st.Primary.RiskScore,
@@ -161,29 +161,29 @@ func BuildScreeningGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 		return nil, err
 	}
 
-	if err := g.AddLambdaNode(nodeAIReport, compose.InvokableLambda(func(ctx context.Context, st *domain.PipelineState) (*domain.PipelineState, error) {
+	if err := g.AddLambdaNode(nodeAIReport, compose.InvokableLambda(func(ctx context.Context, st *tools.PipelineState) (*tools.PipelineState, error) {
 		t0 := time.Now()
 		msgs := llm.ReportMessages(st, deps.Cfg)
-		out, err := llm.GenerateWithRetry(ctx, deps.Router.For(domain.TaskReport), msgs, retryCfg)
+		out, err := llm.GenerateWithRetry(ctx, deps.Router.For(tools.TaskReport), msgs, retryCfg)
 		if err != nil {
 			return nil, err
 		}
 		st.ReportMarkdown = out.Content
 		recordStep(st, nodeAIReport, t0)
-		st.Audit.AddDecision(string(domain.TaskReport), deps.Router.ModelName(domain.TaskReport),
+		st.Audit.AddDecision(string(tools.TaskReport), deps.Router.ModelName(tools.TaskReport),
 			truncSummary(msgs), out.Content, time.Since(t0).Milliseconds())
 		return st, nil
 	}), compose.WithNodeName(nodeAIReport)); err != nil {
 		return nil, err
 	}
 
-	if err := g.AddLambdaNode(nodePersist, compose.InvokableLambda(func(ctx context.Context, st *domain.PipelineState) (domain.ScreeningResult, error) {
+	if err := g.AddLambdaNode(nodePersist, compose.InvokableLambda(func(ctx context.Context, st *tools.PipelineState) (tools.ScreeningResult, error) {
 		t0 := time.Now()
 		payload := store.LogJSON(st)
 		st.Audit.AddStep("pipeline_snapshot", payload, time.Since(t0).Milliseconds())
 
 		if err := deps.Store.FlushAudit(ctx, st.TraceID, st.Audit); err != nil {
-			return domain.ScreeningResult{}, err
+			return tools.ScreeningResult{}, err
 		}
 
 		res := finalizeResult(st)
@@ -196,7 +196,7 @@ func BuildScreeningGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 		return nil, err
 	}
 
-	branch := compose.NewGraphBranch(func(ctx context.Context, st *domain.PipelineState) (string, error) {
+	branch := compose.NewGraphBranch(func(ctx context.Context, st *tools.PipelineState) (string, error) {
 		if st.Primary != nil && st.Primary.NeedsSecondaryReview && st.Primary.RiskScore >= thr {
 			return nodeAISecondary, nil
 		}
@@ -224,12 +224,12 @@ func BuildScreeningGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 	return g.Compile(ctx, compose.WithGraphName("sanctions_screening_v1"))
 }
 
-func degradedSecondary(st *domain.PipelineState, cause error) *domain.SecondaryAssessment {
+func degradedSecondary(st *tools.PipelineState, cause error) *tools.SecondaryAssessment {
 	base := 0.0
 	if st.Primary != nil {
 		base = st.Primary.RiskScore
 	}
-	return &domain.SecondaryAssessment{
+	return &tools.SecondaryAssessment{
 		Skipped:           true,
 		Confirmed:         false,
 		FinalRiskScore:    base,
@@ -239,14 +239,14 @@ func degradedSecondary(st *domain.PipelineState, cause error) *domain.SecondaryA
 	}
 }
 
-func recordStep(st *domain.PipelineState, name string, t0 time.Time) {
+func recordStep(st *tools.PipelineState, name string, t0 time.Time) {
 	if st.StepTimings == nil {
 		st.StepTimings = map[string]time.Duration{}
 	}
 	st.StepTimings[name] = time.Since(t0)
 }
 
-func finalizeResult(st *domain.PipelineState) domain.ScreeningResult {
+func finalizeResult(st *tools.PipelineState) tools.ScreeningResult {
 	score := 0.0
 	if st.Primary != nil {
 		score = st.Primary.RiskScore
@@ -266,7 +266,7 @@ func finalizeResult(st *domain.PipelineState) domain.ScreeningResult {
 	} else if score >= 0.35 {
 		level = "MEDIUM"
 	}
-	return domain.ScreeningResult{
+	return tools.ScreeningResult{
 		TraceID:        st.TraceID,
 		TransactionID:  st.Request.TransactionID,
 		FinalRiskScore: score,
