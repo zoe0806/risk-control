@@ -10,7 +10,7 @@
 |------|------|
 | **`workflow/graph.go`** | 真正的业务编排：`compose.NewGraph` + `AddLambdaNode` + `AddEdge` + `AddBranch`。 |
 | **`llm.Router`** | 仅做 **模型路由**（初筛 / 二验 / 报告可绑定不同 `ChatModel`），**不是** Graph 本身。 |
-| **`workflow/observability.go`** | `compose.WithCallbacks`：节点级 **OnStart / OnEnd / OnError**，并把 **节点边（上一节点 → 当前节点）** 与耗时写入 `ScreeningResult.observation`。 |
+| **`workflow/observability.go`** | `compose.WithCallbacks`：节点级 **OnStart / OnEnd / OnError**；结构化轨迹经 **`graph_observation`** 写入 `audit_log`（按 `trace_id` 查）。 |
 | **`store.FlushAudit`** | **仅**将 `audit_log`、`ai_decision` 在同一 **InnoDB 事务**中落库；名单查询不在该事务内。 |
 | **`llm/retry.go`** | 对 LLM `Generate` 做有限次重试 + 指数退避（可重试错误启发式判断）。 |
 
@@ -85,10 +85,13 @@ go build -o demo .
 
 `transaction_id` 可省略，服务会自动生成。
 
-响应 `tools.ScreeningResult` 除分数、等级、初筛/二验、报告外，可能包含：
+响应体为 `tools.ScreeningResult`（分数、等级、初筛/二验、报告、`persisted_audit_rows` 等），**不含**图执行观测明细。
 
-- **`observation`**：本次 Invoke 的节点跨度与 **边列表**（便于画实际执行路径）。  
-- **`persisted_audit_rows`**：本次写入审计相关表的行数（批量步骤 + AI 决策 + 快照）。
+### 观测数据去哪看？
+
+- **开发期**：标准输出仍有 `[graph cb]` 日志，便于本地跟一条请求。  
+- **库内**：配置了 MySQL 时，每次筛查会在 `audit_log` 中写入 `step_name = graph_observation` 的一行，`detail_json` 为节点跨度与边的 JSON，与 **`trace_id`** 对齐（响应里的 `trace_id` 可用来查）。  
+- **后续可做**：单独做一个只读 **可视化入口**（小 Web 页或内网 Grafana/自建 Trace 列表），按 `trace_id` 拉 `audit_log` + `ai_decision` 画 DAG/时间线；与业务 `/v1/screen` 响应解耦更清晰。
 
 ---
 

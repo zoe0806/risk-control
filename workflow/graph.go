@@ -182,15 +182,19 @@ func BuildScreeningGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 		payload := store.LogJSON(st)
 		st.Audit.AddStep("pipeline_snapshot", payload, time.Since(t0).Milliseconds())
 
+		res := finalizeResult(st)
+		// 图观测不写进筛查 API 响应；落 audit_log（step_name=graph_observation），供后续可视化/运维查询 trace_id。
+		if tr := ExportFromContext(ctx); tr != nil {
+			if obs := tr.ToObservation(); obs != nil && (len(obs.NodeSpans) > 0 || len(obs.Edges) > 0) {
+				st.Audit.AddStep("graph_observation", store.LogJSON(obs), 0)
+			}
+		}
+
 		if err := deps.Store.FlushAudit(ctx, st.TraceID, st.Audit); err != nil {
 			return tools.ScreeningResult{}, err
 		}
 
-		res := finalizeResult(st)
 		res.PersistedAuditRows = len(st.Audit.Steps) + len(st.Audit.Decisions)
-		if tr := ExportFromContext(ctx); tr != nil {
-			res.Observation = tr.ToObservation()
-		}
 		return res, nil
 	}), compose.WithNodeName(nodePersist)); err != nil {
 		return nil, err

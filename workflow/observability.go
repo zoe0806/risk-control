@@ -38,7 +38,7 @@ func ExportFromContext(ctx context.Context) *RunTrace {
 	return v
 }
 
-// ToObservation 拷贝为 API 可返回结构。
+// ToObservation 拷贝为结构化快照（写入审计等，不放入筛查业务 JSON 响应）。
 func (tr *RunTrace) ToObservation() *tools.GraphObservation {
 	if tr == nil {
 		return nil

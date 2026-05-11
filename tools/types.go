@@ -122,8 +122,6 @@ type ScreeningResult struct {
 	ReportMarkdown     string               `json:"report_markdown"`
 	TotalDurationMs    int64                `json:"total_duration_ms"`
 	PersistedAuditRows int                  `json:"persisted_audit_rows"`
-
-	Observation *GraphObservation `json:"observation,omitempty"`
 }
 
 // Task 用于模型分层路由：未来可将轻量任务映射到更便宜模型。
