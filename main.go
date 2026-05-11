@@ -38,7 +38,7 @@ func main() {
 		log.Printf("MYSQL_DSN empty: using Noop store (no list / audit persistence)")
 	}
 
-	router, err := llm.NewRouter(ctx, cfg)
+	router, err := llm.NewRouter(ctx, *cfg)
 	if err != nil {
 		log.Fatalf("llm router: %v", err)
 	}
@@ -46,7 +46,7 @@ func main() {
 		log.Printf("DEEPSEEK_API_KEY empty: using mock LLM outputs")
 	}
 
-	run, err := workflow.BuildScreeningGraph(ctx, &workflow.GraphDeps{Store: st, Router: router})
+	run, err := workflow.BuildScreeningGraph(ctx, &workflow.GraphDeps{Store: st, Router: router, Cfg: *cfg})
 	if err != nil {
 		log.Fatalf("compile graph: %v", err)
 	}
@@ -67,7 +67,8 @@ func main() {
 			return
 		}
 		t0 := time.Now()
-		out, err := run.Invoke(r.Context(), req)
+		invokeCtx, _ := workflow.WithRunTrace(r.Context())
+		out, err := run.Invoke(invokeCtx, req, workflow.InvokeScreeningOptions()...)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -87,7 +88,7 @@ func main() {
 			return
 		}
 		t0 := time.Now()
-		results, errs := batch.ScreenConcurrent(r.Context(), run, reqs, 4)
+		results, errs := batch.ScreenConcurrent(r.Context(), run, reqs, workflow.InvokeScreeningOptions()...)
 		type row struct {
 			Result domain.ScreeningResult `json:"result,omitempty"`
 			Error  string                 `json:"error,omitempty"`

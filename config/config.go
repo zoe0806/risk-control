@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -14,34 +15,43 @@ type Config struct {
 
 	MySQLDSN string `json:"mysqldsn"`
 
-	DeepSeekAPIKey  string        `json:"deepseekapikey"`
-	DeepSeekBaseURL string        `json:"deepseekbaseurl"`
-	ModelPrimary    string        `json:"modelprimary"`
-	ModelVerify     string        `json:"modelverify"`
-	ModelReport     string        `json:"modelreport"`
-	LLMTimeout      time.Duration `json:"llmtimeout"`
-	SysPrompt       string        `json:"sysprompt"`
-	UserPrompt      string        `json:"userprompt"`
-	VerifyPrompt    string        `json:"verifyprompt"`
-	ReportPrompt    string        `json:"reportprompt"`
+	DeepSeekAPIKey   string        `json:"deepSeekAPIKey"`
+	DeepSeekBaseURL  string        `json:"deepSeekBaseURL"`
+	ModelPrimary     string        `json:"modelPrimary"`
+	ModelVerify      string        `json:"modelVerify"`
+	ModelReport      string        `json:"modelReport"`
+	LLMTimeout       time.Duration `json:"llmTimeout"`
+	SysPrompt        string        `json:"sysPrompt"`
+	UserPrompt       string        `json:"userPrompt"`
+	VerifyPrompt     string        `json:"verifyPrompt"`
+	ReportPrompt     string        `json:"reportPrompt"`
+	PrimaryRiskScore float64       `json:"primaryRiskScore"`
+	Workers          int           `json:"workers"`
 }
 
-func Load() Config {
-	dir, err := os.Getwd()
-	if err != nil {
-		log.Fatalf("get current directory: %v", err)
-	}
-	cfgPath := filepath.Join(dir, "config.json")
-	log.Printf("config file path: %s", cfgPath)
-	cfg, err := os.ReadFile(cfgPath)
-	if err != nil {
-		log.Fatalf("read config file: %v", err)
-	}
-	var config Config
-	err = json.Unmarshal(cfg, &config)
-	if err != nil {
-		log.Fatalf("unmarshal config: %v", err)
-	}
-	config.LLMTimeout = time.Duration(config.LLMTimeout) * time.Second
-	return config
+var config Config
+var once sync.Once
+
+func init() {
+	once.Do(func() {
+		dir, err := os.Getwd()
+		if err != nil {
+			log.Fatalf("get current directory: %v", err)
+		}
+		cfgPath := filepath.Join(dir, "config.json")
+		log.Printf("config file path: %s", cfgPath)
+		cfg, err := os.ReadFile(cfgPath)
+		if err != nil {
+			log.Fatalf("read config file: %v", err)
+		}
+		err = json.Unmarshal(cfg, &config)
+		if err != nil {
+			log.Fatalf("unmarshal config: %v", err)
+		}
+		config.LLMTimeout = time.Duration(config.LLMTimeout) * time.Second
+	})
+}
+
+func Load() *Config {
+	return &config
 }

@@ -176,6 +176,39 @@ func (m *MySQL) InsertAIDecision(ctx context.Context, traceID, task, modelName, 
 	return err
 }
 
+// FlushAudit 在同一 InnoDB 事务中写入 audit_log 与 ai_decision（名单表不在此事务内）。
+func (m *MySQL) FlushAudit(ctx context.Context, traceID string, buf *domain.AuditBuffer) error {
+	if buf == nil {
+		return nil
+	}
+	if len(buf.Steps) == 0 && len(buf.Decisions) == 0 {
+		return nil
+	}
+	tx, err := m.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, s := range buf.Steps {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO audit_log (trace_id, step_name, detail_json, latency_ms) VALUES (?,?,?,?)`,
+			traceID, s.StepName, s.DetailJSON, s.LatencyMs,
+		); err != nil {
+			return err
+		}
+	}
+	for _, d := range buf.Decisions {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO ai_decision (trace_id, task_kind, model_name, input_summary, output_text, latency_ms) VALUES (?,?,?,?,?,?)`,
+			traceID, d.TaskKind, d.ModelName, d.InputSummary, d.OutputText, d.LatencyMs,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // LogJSON 辅助序列化。
 func LogJSON(v any) string {
 	b, _ := json.Marshal(v)

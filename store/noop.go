@@ -22,3 +22,9 @@ func (Noop) InsertAuditStep(ctx context.Context, traceID, step string, detailJSO
 func (Noop) InsertAIDecision(ctx context.Context, traceID, task, modelName, inputSummary, outputText string, latencyMs int64) error {
 	return nil
 }
+
+func (Noop) FlushAudit(ctx context.Context, traceID string, buf *domain.AuditBuffer) error {
+	return nil
+}
+
+var _ Store = Noop{}

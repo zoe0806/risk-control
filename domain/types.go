@@ -46,6 +46,51 @@ type SecondaryAssessment struct {
 	Rationale       string  `json:"rationale"`
 	RawModelOutput  string  `json:"raw_model_output,omitempty"`
 	Skipped         bool    `json:"skipped"`
+	// TechnicalDegraded 为 true 表示二验因超时/解析错误等技术原因未完成，未做 AI 二次验证（业务上区别于「规则跳过」）。
+	TechnicalDegraded bool `json:"technical_degraded,omitempty"`
+}
+
+// AuditBuffer 流水线内累积的审计条目，仅在 persist 时一次性事务写入。
+type AuditBuffer struct {
+	Steps     []AuditStepDraft     `json:"-"`
+	Decisions []AIDecisionDraft    `json:"-"`
+}
+
+// AuditStepDraft 审计步骤草稿。
+type AuditStepDraft struct {
+	StepName   string
+	DetailJSON string
+	LatencyMs  int64
+}
+
+// AIDecisionDraft AI 决策行草稿。
+type AIDecisionDraft struct {
+	TaskKind     string
+	ModelName    string
+	InputSummary string
+	OutputText   string
+	LatencyMs    int64
+}
+
+// GraphObservation 一次 Invoke 的节点级观测（由 Eino compose.WithCallbacks 填充）。
+type GraphObservation struct {
+	NodeSpans []NodeSpanObservation `json:"node_spans,omitempty"`
+	Edges     []EdgeObservation     `json:"edges,omitempty"`
+}
+
+// NodeSpanObservation 节点耗时 / 错误。
+type NodeSpanObservation struct {
+	Node       string `json:"node"`
+	Component  string `json:"component,omitempty"`
+	Type       string `json:"type,omitempty"`
+	DurationMs int64  `json:"duration_ms,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
+// EdgeObservation 控制流边（上一节点 → 当前节点），便于绘制实际路径。
+type EdgeObservation struct {
+	From string `json:"from"`
+	To   string `json:"to"`
 }
 
 // PipelineState 贯穿 Graph 的状态载体（强类型、可序列化进审计）。
@@ -62,6 +107,8 @@ type PipelineState struct {
 	ReportMarkdown string `json:"report_markdown,omitempty"`
 
 	StepTimings map[string]time.Duration `json:"step_timings,omitempty"`
+
+	Audit *AuditBuffer `json:"-"`
 }
 
 // ScreeningResult 对外返回与持久化摘要。
@@ -75,4 +122,6 @@ type ScreeningResult struct {
 	ReportMarkdown     string    `json:"report_markdown"`
 	TotalDurationMs    int64     `json:"total_duration_ms"`
 	PersistedAuditRows int       `json:"persisted_audit_rows"`
+
+	Observation *GraphObservation `json:"observation,omitempty"`
 }
