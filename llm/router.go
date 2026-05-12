@@ -24,9 +24,6 @@ type Router struct {
 
 // 多模型分层/模型路由，根据配置创建模型实例，并通过Router.For方法根据任务类型选择对应模型
 func NewRouter(ctx context.Context, cfg config.Config) (*Router, error) {
-	if cfg.DeepSeekAPIKey == "" {
-		return nil, fmt.Errorf("ai model api key is empty")
-	}
 	base := cfg.DeepSeekBaseURL
 	timeout := cfg.LLMTimeout
 	mk := func(name string) (model.BaseChatModel, error) {

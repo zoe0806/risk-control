@@ -10,6 +10,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 
 	"risk_control/tools"
+	"time"
 )
 
 // MySQL 使用 InnoDB 与显式事务（调用方可在外层 BeginTx）。
@@ -25,8 +26,11 @@ func OpenMySQL(dsn string) (*MySQL, error) {
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(8)
-	db.SetMaxIdleConns(4)
+	// 连接池核心配置
+	db.SetMaxOpenConns(8)                  // 最大打开连接数
+	db.SetMaxIdleConns(4)                  // 最大空闲连接数
+	db.SetConnMaxLifetime(5 * time.Minute) // 连接最大存活时间，到期后会被关闭重新创建
+	db.SetConnMaxIdleTime(2 * time.Minute) // 空闲连接最大存活时间
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
 		return nil, err
