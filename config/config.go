@@ -15,18 +15,22 @@ type Config struct {
 
 	MySQLDSN string `json:"mysqldsn"`
 
-	DeepSeekAPIKey   string        `json:"deepSeekAPIKey"`
-	DeepSeekBaseURL  string        `json:"deepSeekBaseURL"`
-	ModelPrimary     string        `json:"modelPrimary"`
-	ModelVerify      string        `json:"modelVerify"`
-	ModelReport      string        `json:"modelReport"`
-	LLMTimeout       time.Duration `json:"llmTimeout"`
-	SysPrompt        string        `json:"sysPrompt"`
-	UserPrompt       string        `json:"userPrompt"`
-	VerifyPrompt     string        `json:"verifyPrompt"`
-	ReportPrompt     string        `json:"reportPrompt"`
-	PrimaryRiskScore float64       `json:"primaryRiskScore"`
-	Workers          int           `json:"workers"`
+	DeepSeekAPIKey    string        `json:"deepSeekAPIKey"`
+	DeepSeekBaseURL   string        `json:"deepSeekBaseURL"`
+	ModelPrimary      string        `json:"modelPrimary"`
+	ModelVerify       string        `json:"modelVerify"`
+	ModelReport       string        `json:"modelReport"`
+	LLMTimeout        time.Duration `json:"llmTimeout"`
+	SysPrompt         string        `json:"sysPrompt"`
+	UserPrompt        string        `json:"userPrompt"`
+	VerifyPrompt      string        `json:"verifyPrompt"`
+	ReportPrompt      string        `json:"reportPrompt"`
+	PrimaryRiskScore  float64       `json:"primaryRiskScore"`
+	Workers           int           `json:"workers"`
+	StockSysPrompt    string        `json:"stockSysPrompt"`
+	StockUserPrompt   string        `json:"stockUserPrompt"`
+	StockReportPrompt string        `json:"stockReportPrompt"`
+	StockVerifyPrompt string        `json:"stockVerifyPrompt"`
 }
 
 var config Config

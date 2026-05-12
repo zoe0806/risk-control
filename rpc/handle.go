@@ -9,14 +9,12 @@ import (
 	"time"
 
 	"log"
-
-	"github.com/cloudwego/eino/compose"
 )
 
-func RegisterRoutes(mux *http.ServeMux, run compose.Runnable[tools.ScreeningRequest, tools.ScreeningResult]) http.Handler {
+func RegisterRoutes(mux *http.ServeMux, eng *workflow.RiskEngine) http.Handler {
 	mux.HandleFunc("/health", HealthCheck)
-	mux.HandleFunc("/v1/screen", func(w http.ResponseWriter, r *http.Request) { Screen(w, r, run) })
-	mux.HandleFunc("/v1/screen/batch", func(w http.ResponseWriter, r *http.Request) { ScreenBatch(w, r, run) })
+	mux.HandleFunc("/v1/screen", func(w http.ResponseWriter, r *http.Request) { Screen(w, r, eng) })
+	mux.HandleFunc("/v1/screen/batch", func(w http.ResponseWriter, r *http.Request) { ScreenCrossBorderBatch(w, r, eng) })
 	return logReq(mux)
 }
 
@@ -33,7 +31,12 @@ func HealthCheck(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("ok"))
 }
 
-func Screen(w http.ResponseWriter, r *http.Request, run compose.Runnable[tools.ScreeningRequest, tools.ScreeningResult]) {
+// Screen POST body: tools.ScreeningRequest。
+func Screen(w http.ResponseWriter, r *http.Request, eng *workflow.RiskEngine) {
+	if eng == nil {
+		http.Error(w, "risk engine not configured", http.StatusInternalServerError)
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -45,28 +48,36 @@ func Screen(w http.ResponseWriter, r *http.Request, run compose.Runnable[tools.S
 	}
 	t0 := time.Now()
 	invokeCtx, _ := workflow.WithRunTrace(r.Context())
-	out, err := run.Invoke(invokeCtx, req, workflow.InvokeScreeningOptions()...)
+	res, err := eng.EvaluateScreeningRequest(invokeCtx, req, workflow.InvokeScreeningOptions()...)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	out.TotalDurationMs = time.Since(t0).Milliseconds()
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_ = json.NewEncoder(w).Encode(out)
+	res.TotalDurationMs = time.Since(t0).Milliseconds()
+	_ = json.NewEncoder(w).Encode(res)
 }
 
-func ScreenBatch(w http.ResponseWriter, r *http.Request, run compose.Runnable[tools.ScreeningRequest, tools.ScreeningResult]) {
+func ScreenCrossBorderBatch(w http.ResponseWriter, r *http.Request, eng *workflow.RiskEngine) {
+	if eng == nil {
+		http.Error(w, "risk engine not configured", http.StatusInternalServerError)
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	var reqs []tools.ScreeningRequest
-	if err := json.NewDecoder(r.Body).Decode(&reqs); err != nil {
+	var txns []tools.CrossBorderTransaction
+	if err := json.NewDecoder(r.Body).Decode(&txns); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	reqs := make([]tools.ScreeningRequest, len(txns))
+	for i := range txns {
+		reqs[i] = tools.NewCrossBorderScreeningRequest(txns[i])
+	}
 	t0 := time.Now()
-	results, errs := batch.ScreenConcurrent(r.Context(), run, reqs, workflow.InvokeScreeningOptions()...)
+	results, errs := batch.ScreenConcurrent(r.Context(), eng.CrossBorderRunnable(), reqs, workflow.InvokeScreeningOptions()...)
 	type row struct {
 		Result tools.ScreeningResult `json:"result,omitempty"`
 		Error  string                `json:"error,omitempty"`
@@ -85,5 +96,4 @@ func ScreenBatch(w http.ResponseWriter, r *http.Request, run compose.Runnable[to
 		"batch_duration_ms": time.Since(t0).Milliseconds(),
 		"concurrency":       4,
 	})
-
 }

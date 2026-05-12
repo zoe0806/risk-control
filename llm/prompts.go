@@ -13,8 +13,9 @@ import (
 
 func PrimaryMessages(st *tools.PipelineState, cfg config.Config) []*schema.Message {
 	candJSON, _ := json.Marshal(st.Candidates)
+	tx := st.Request.Transaction
 	sys := cfg.SysPrompt
-	user := fmt.Sprintf(cfg.UserPrompt, st.Request.Counterparty, st.Request.Country, st.Request.BankName, st.Request.PaymentPurpose, st.Party.NormalizedKey, string(candJSON))
+	user := fmt.Sprintf(cfg.UserPrompt, tx.Counterparty, tx.Country, tx.BankName, tx.PaymentPurpose, st.Party.NormalizedKey, string(candJSON))
 	return []*schema.Message{
 		schema.SystemMessage(sys),
 		schema.UserMessage(user),
@@ -46,10 +47,11 @@ func ReportMessages(st *tools.PipelineState, cfg config.Config) []*schema.Messag
 		sec = "（规则路径：未达二验阈值，已跳过二次模型）"
 	}
 	pb, _ := json.Marshal(st.Primary)
+	tx := st.Request.Transaction
 	user := fmt.Sprintf(`交易ID: %s
 对手方: %s
 初筛: %s
-二验: %s`, st.Request.TransactionID, st.Request.Counterparty, string(pb), sec)
+二验: %s`, tx.TransactionID, tx.Counterparty, string(pb), sec)
 	return []*schema.Message{
 		schema.SystemMessage(sys),
 		schema.UserMessage(user),

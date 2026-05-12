@@ -30,18 +30,23 @@ func main() {
 	}
 	defer st.Close()
 
+	if err := st.EnsureSchema(context.Background()); err != nil {
+		panic(fmt.Errorf("ensure schema: %v", err))
+	}
+
 	router, err := llm.NewRouter(ctx, *cfg)
 	if err != nil {
 		panic(fmt.Errorf("llm router: %v", err))
 	}
 
-	run, err := workflow.BuildScreeningGraph(ctx, &workflow.GraphDeps{Store: st, Router: router, Cfg: *cfg})
+	deps := &workflow.GraphDeps{Store: st, Router: router, Cfg: *cfg}
+	eng, err := workflow.NewRiskEngine(ctx, deps)
 	if err != nil {
-		panic(fmt.Errorf("compile graph: %v", err))
+		panic(fmt.Errorf("risk engine: %v", err))
 	}
 
 	mux := http.NewServeMux()
-	handler := rpc.RegisterRoutes(mux, run)
+	handler := rpc.RegisterRoutes(mux, eng)
 	srv := &http.Server{Addr: cfg.HTTPAddr, Handler: handler}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

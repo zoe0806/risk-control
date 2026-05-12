@@ -60,9 +60,9 @@ func NewRouter(ctx context.Context, cfg config.Config) (*Router, error) {
 // For 返回任务对应模型（强类型路由入口）。
 func (rt *Router) For(t tools.Task) model.BaseChatModel {
 	switch t {
-	case tools.TaskSanctionsVerify:
+	case tools.TaskSanctionsVerify, tools.TaskStockVerify:
 		return rt.verify
-	case tools.TaskReport:
+	case tools.TaskReport, tools.TaskStockReport:
 		return rt.report
 	default:
 		return rt.primary
@@ -71,9 +71,9 @@ func (rt *Router) For(t tools.Task) model.BaseChatModel {
 
 func (rt *Router) ModelName(t tools.Task) string {
 	switch t {
-	case tools.TaskSanctionsVerify:
+	case tools.TaskSanctionsVerify, tools.TaskStockVerify:
 		return rt.verifyModelName
-	case tools.TaskReport:
+	case tools.TaskReport, tools.TaskStockReport:
 		return rt.reportModelName
 	default:
 		return rt.primaryModelName

@@ -1,134 +1,99 @@
 package tools
 
-import "time"
+import (
+	"fmt"
+	"strings"
+)
 
-// ScreeningRequest 单笔跨境交易对手筛查请求（演示用最小字段集）。
+// 统一入口 JSON 的业务域（与 HTTP /v1/screen 的 ScreeningRequest 对齐）。
+const (
+	BusinessStock       = "stock"
+	BusinessCrossBorder = "cross_border"
+)
+
+// ScreeningRequest 统一风控请求体：按 business_type 选择 stock_order 或 transaction。
 type ScreeningRequest struct {
-	TransactionID   string `json:"transaction_id"`
-	Counterparty    string `json:"counterparty"` // 名称，可多语言
-	Country         string `json:"country"`      // ISO2 或文本
-	BankName        string `json:"bank_name,omitempty"`
-	PaymentPurpose  string `json:"payment_purpose,omitempty"`
-	AmountMinorUnit int64  `json:"amount_minor_unit,omitempty"`
-	Currency        string `json:"currency,omitempty"`
+	BusinessType string                 `json:"business_type,omitempty"`
+	Transaction  CrossBorderTransaction `json:"transaction"`
+	StockOrder   StockOrder             `json:"stock_order,omitempty"`
 }
 
-// NormalizedParty 清洗与标准化后的对手方信息。
-type NormalizedParty struct {
-	DisplayName       string   `json:"display_name"`
-	NormalizedKey     string   `json:"normalized_key"`
-	Tokens            []string `json:"tokens"`
-	CountryNormalized string   `json:"country_normalized"`
+// NewCrossBorderScreeningRequest 由单笔跨境交易构造图入口请求（批处理/兼容旧 JSON 扁平体时可复用）。
+func NewCrossBorderScreeningRequest(txn CrossBorderTransaction) ScreeningRequest {
+	return ScreeningRequest{
+		BusinessType: BusinessCrossBorder,
+		Transaction:  txn,
+	}
 }
 
-// SanctionCandidate 本地名单缓存命中（粗筛候选，供 AI 精排）。
-type SanctionCandidate struct {
-	ID               int64  `json:"id"`
-	ListCode         string `json:"list_code"`
-	NameOriginal     string `json:"name_original"`
-	NameNormalized   string `json:"name_normalized"`
-	MatchExplanation string `json:"match_explanation,omitempty"`
+// ResolveBusinessType 返回要执行的分支；未填时按「仅一方有有效负载」推断，否则报错要求显式指定。
+func (r ScreeningRequest) ResolveBusinessType() (string, error) {
+	bt := strings.TrimSpace(strings.ToLower(r.BusinessType))
+	if bt != "" {
+		switch bt {
+		case BusinessStock, BusinessCrossBorder:
+			return bt, nil
+		default:
+			return "", fmt.Errorf("unknown business_type %q", r.BusinessType)
+		}
+	}
+	hasStock := strings.TrimSpace(r.StockOrder.Symbol) != ""
+	hasCB := strings.TrimSpace(r.Transaction.Counterparty) != ""
+	if hasStock && !hasCB {
+		return BusinessStock, nil
+	}
+	if hasCB && !hasStock {
+		return BusinessCrossBorder, nil
+	}
+	if hasStock && hasCB {
+		return "", fmt.Errorf("ambiguous request: set business_type to %q or %q", BusinessStock, BusinessCrossBorder)
+	}
+	return "", fmt.Errorf("empty request: set business_type and populate stock_order or transaction")
 }
 
-// PrimaryAssessment AI 初筛结构化结果。
-type PrimaryAssessment struct {
-	RiskScore            float64  `json:"risk_score"`
-	MatchedNames         []string `json:"matched_names"`
-	Rationale            string   `json:"rationale"`
-	NeedsSecondaryReview bool     `json:"needs_secondary_review"`
-	RawModelOutput       string   `json:"raw_model_output,omitempty"`
+// ValidatePayload 校验与 kind 对应的字段是否齐全。
+func (r ScreeningRequest) ValidatePayload(kind string) error {
+	switch kind {
+	case BusinessStock:
+		if strings.TrimSpace(r.StockOrder.Symbol) == "" {
+			return fmt.Errorf("stock_order.symbol is required")
+		}
+		return nil
+	case BusinessCrossBorder:
+		if strings.TrimSpace(r.Transaction.Counterparty) == "" {
+			return fmt.Errorf("transaction.counterparty is required")
+		}
+		return nil
+	default:
+		return fmt.Errorf("invalid business kind %q", kind)
+	}
 }
 
-// SecondaryAssessment 高风险二次验证结果。
-type SecondaryAssessment struct {
-	Confirmed      bool    `json:"confirmed"`
-	FinalRiskScore float64 `json:"final_risk_score"`
-	Rationale      string  `json:"rationale"`
-	RawModelOutput string  `json:"raw_model_output,omitempty"`
-	Skipped        bool    `json:"skipped"`
-	// TechnicalDegraded 为 true 表示二验因超时/解析错误等技术原因未完成，未做 AI 二次验证（业务上区别于「规则跳过」）。
-	TechnicalDegraded bool `json:"technical_degraded,omitempty"`
+// ForCrossBorderGraph 返回跨境制裁图 Invoke 用请求副本（仅保留跨境相关字段）。
+func (r ScreeningRequest) ForCrossBorderGraph() ScreeningRequest {
+	return ScreeningRequest{
+		BusinessType: BusinessCrossBorder,
+		Transaction:  r.Transaction,
+	}
 }
 
-// AuditBuffer 流水线内累积的审计条目，仅在 persist 时一次性事务写入。
-type AuditBuffer struct {
-	Steps     []AuditStepDraft  `json:"-"`
-	Decisions []AIDecisionDraft `json:"-"`
-}
-
-// AuditStepDraft 审计步骤草稿。
-type AuditStepDraft struct {
-	StepName   string
-	DetailJSON string
-	LatencyMs  int64
-}
-
-// AIDecisionDraft AI 决策行草稿。
-type AIDecisionDraft struct {
-	TaskKind     string
-	ModelName    string
-	InputSummary string
-	OutputText   string
-	LatencyMs    int64
-}
-
-// GraphObservation 一次 Invoke 的节点级观测（由 Eino compose.WithCallbacks 填充）。
-type GraphObservation struct {
-	NodeSpans []NodeSpanObservation `json:"node_spans,omitempty"`
-	Edges     []EdgeObservation     `json:"edges,omitempty"`
-}
-
-// NodeSpanObservation 节点耗时 / 错误。
-type NodeSpanObservation struct {
-	Node       string `json:"node"`
-	Component  string `json:"component,omitempty"`
-	Type       string `json:"type,omitempty"`
-	DurationMs int64  `json:"duration_ms,omitempty"`
-	Error      string `json:"error,omitempty"`
-}
-
-// EdgeObservation 控制流边（上一节点 → 当前节点），便于绘制实际路径。
-type EdgeObservation struct {
-	From string `json:"from"`
-	To   string `json:"to"`
-}
-
-// PipelineState 贯穿 Graph 的状态载体（强类型、可序列化进审计）。
-type PipelineState struct {
-	TraceID string `json:"trace_id"`
-
-	Request    ScreeningRequest    `json:"request"`
-	Party      *NormalizedParty    `json:"party,omitempty"`
-	Candidates []SanctionCandidate `json:"candidates,omitempty"`
-
-	Primary   *PrimaryAssessment   `json:"primary,omitempty"`
-	Secondary *SecondaryAssessment `json:"secondary,omitempty"`
-
-	ReportMarkdown string `json:"report_markdown,omitempty"`
-
-	StepTimings map[string]time.Duration `json:"step_timings,omitempty"`
-
-	Audit *AuditBuffer `json:"-"`
-}
-
-// ScreeningResult 对外返回与持久化摘要。
+// ScreeningResult 统一对外筛查结果（跨境制裁与股票风控共用 JSON 形态）。
+// TransactionID：跨境为交易号；股票为订单号 order_id。
+// Blocked / BlockReason：仅股票硬阻断等场景有值。
 type ScreeningResult struct {
-	TraceID            string               `json:"trace_id"`
-	TransactionID      string               `json:"transaction_id"`
+	BusinessType string `json:"business_type,omitempty"` // cross_border | stock
+
+	TraceID       string `json:"trace_id"`
+	TransactionID string `json:"transaction_id"`
+
+	Blocked     bool   `json:"blocked,omitempty"`
+	BlockReason string `json:"block_reason,omitempty"`
+
 	FinalRiskScore     float64              `json:"final_risk_score"`
-	Level              string               `json:"level"` // LOW / MEDIUM / HIGH
+	Level              string               `json:"level"` // LOW / MEDIUM / HIGH / BLOCKED（股票）
 	Primary            *PrimaryAssessment   `json:"primary,omitempty"`
 	Secondary          *SecondaryAssessment `json:"secondary,omitempty"`
 	ReportMarkdown     string               `json:"report_markdown"`
 	TotalDurationMs    int64                `json:"total_duration_ms"`
 	PersistedAuditRows int                  `json:"persisted_audit_rows"`
 }
-
-// Task 用于模型分层路由：未来可将轻量任务映射到更便宜模型。
-type Task string
-
-const (
-	TaskSanctionsPrimary Task = "sanctions_primary"
-	TaskSanctionsVerify  Task = "sanctions_verify"
-	TaskReport           Task = "sanctions_report"
-)
