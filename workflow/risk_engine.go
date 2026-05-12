@@ -22,7 +22,7 @@ type GraphDeps struct {
 // RiskEngine 多业务风控：各域独立 Runnable，通过类型安全的方法对外暴露。
 type RiskEngine struct {
 	stockGraph compose.Runnable[tools.StockOrder, tools.ScreeningResult]
-	cbGraph    compose.Runnable[tools.ScreeningRequest, tools.ScreeningResult]
+	cbGraph    compose.Runnable[tools.CrossBorderTransaction, tools.ScreeningResult]
 }
 
 // NewRiskEngine 基于共享依赖编译股票图与跨境图。
@@ -41,16 +41,6 @@ func NewRiskEngine(ctx context.Context, deps *GraphDeps) (*RiskEngine, error) {
 	return &RiskEngine{stockGraph: stockGraph, cbGraph: cbGraph}, nil
 }
 
-// EvaluateStockOrder 股票域执行入口（对外与跨境一致为 ScreeningResult）。
-func (e *RiskEngine) EvaluateStockOrder(ctx context.Context, order tools.StockOrder, opts ...compose.Option) (tools.ScreeningResult, error) {
-	return e.stockGraph.Invoke(ctx, order, opts...)
-}
-
-// EvaluateCrossBorderTransaction 跨境域执行入口（单笔交易体，内部包装为 ScreeningRequest）。
-func (e *RiskEngine) EvaluateCrossBorderTransaction(ctx context.Context, txn tools.CrossBorderTransaction, opts ...compose.Option) (tools.ScreeningResult, error) {
-	return e.cbGraph.Invoke(ctx, tools.NewCrossBorderScreeningRequest(txn), opts...)
-}
-
 // EvaluateScreeningRequest 统一入口：解析 business_type、校验负载后分发到股票或跨境图，直接返回 ScreeningResult。
 func (e *RiskEngine) EvaluateScreeningRequest(ctx context.Context, req tools.ScreeningRequest, opts ...compose.Option) (tools.ScreeningResult, error) {
 	kind, err := req.ResolveBusinessType()
@@ -62,15 +52,10 @@ func (e *RiskEngine) EvaluateScreeningRequest(ctx context.Context, req tools.Scr
 	}
 	switch kind {
 	case tools.BusinessStock:
-		return e.EvaluateStockOrder(ctx, req.StockOrder, opts...)
+		return e.stockGraph.Invoke(ctx, req.StockOrder, opts...)
 	case tools.BusinessCrossBorder:
-		return e.cbGraph.Invoke(ctx, req.ForCrossBorderGraph(), opts...)
+		return e.cbGraph.Invoke(ctx, req.Transaction, opts...)
 	default:
 		return tools.ScreeningResult{}, fmt.Errorf("unreachable business kind %q", kind)
 	}
-}
-
-// CrossBorderRunnable 供批处理等需要 compose.Runnable 的场景。
-func (e *RiskEngine) CrossBorderRunnable() compose.Runnable[tools.ScreeningRequest, tools.ScreeningResult] {
-	return e.cbGraph
 }

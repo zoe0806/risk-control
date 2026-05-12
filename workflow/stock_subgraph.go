@@ -13,20 +13,20 @@ import (
 
 // 嵌套子图节点：本地闸门内部顺序（短路在节点内通过 HardBlock 跳过加重逻辑）。
 const (
-	subAbsolute       = "sub_absolute_ban"
-	subEvent          = "sub_event_ban"
-	subWatchlist      = "sub_watchlist"
-	subUnstructured   = "sub_unstructured"
+	subAbsolute     = "sub_absolute_ban"
+	subEvent        = "sub_event_ban"
+	subWatchlist    = "sub_watchlist"
+	subUnstructured = "sub_unstructured"
 )
 
 // demoAbsoluteBanSymbols 演示绝对禁止（可后续换 MySQL）。
 var demoAbsoluteBanSymbols = map[string]struct{}{
-	"900001": {},
+	"300136": {},
 }
 
 // demoWatchlistRestriction 演示「限制清单」→ 强制 AI 复核。
 var demoWatchlistRestriction = map[string]struct{}{
-	"000001": {},
+	"300346": {},
 }
 
 // BuildStockLocalGateGraph 本地与规则闸门子图：同类型进/出，就地写 st.Gate。

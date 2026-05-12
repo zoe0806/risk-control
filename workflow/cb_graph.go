@@ -34,22 +34,22 @@ func primaryRiskThreshold(cfg config.Config) float64 {
 }
 
 // BuildCrossBorderRiskGraph 制裁筛查多步编排：清洗 → 本地候选 → AI 初筛 → 条件二验 → 报告 → 审计。
-func BuildCrossBorderRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable[tools.ScreeningRequest, tools.ScreeningResult], error) {
+func BuildCrossBorderRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable[tools.CrossBorderTransaction, tools.ScreeningResult], error) {
 	if deps == nil || deps.Router == nil || deps.Store == nil {
 		return nil, fmt.Errorf("workflow deps incomplete")
 	}
 	retryCfg := llm.DefaultRetryConfig()
 	thr := primaryRiskThreshold(deps.Cfg)
 
-	g := compose.NewGraph[tools.ScreeningRequest, tools.ScreeningResult]()
+	g := compose.NewGraph[tools.CrossBorderTransaction, tools.ScreeningResult]()
 
-	if err := g.AddLambdaNode(nodeIngest, compose.InvokableLambda(func(ctx context.Context, in tools.ScreeningRequest) (*tools.PipelineState, error) {
-		if in.Transaction.TransactionID == "" {
-			in.Transaction.TransactionID = "txn-demo-" + uuid.New().String()[:8]
+	if err := g.AddLambdaNode(nodeIngest, compose.InvokableLambda(func(ctx context.Context, in tools.CrossBorderTransaction) (*tools.PipelineState, error) {
+		if in.TransactionID == "" {
+			in.TransactionID = "txn-demo-" + uuid.New().String()[:8]
 		}
 		return &tools.PipelineState{
 			TraceID:     uuid.New().String(),
-			Request:     in,
+			Transaction: in,
 			StepTimings: map[string]time.Duration{},
 			Audit:       &tools.AuditBuffer{},
 		}, nil
@@ -59,7 +59,7 @@ func BuildCrossBorderRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Ru
 
 	if err := g.AddLambdaNode(nodeNormalize, compose.InvokableLambda(func(ctx context.Context, st *tools.PipelineState) (*tools.PipelineState, error) {
 		t0 := time.Now()
-		st.Party = tools.NormalizePartyName(st.Request.Transaction.Counterparty, st.Request.Transaction.Country)
+		st.Party = tools.NormalizePartyName(st.Transaction.Counterparty, st.Transaction.Country)
 		recordStep(st, nodeNormalize, t0)
 		return st, nil
 	}), compose.WithNodeName(nodeNormalize)); err != nil {
@@ -266,7 +266,7 @@ func finalizeResult(st *tools.PipelineState) tools.ScreeningResult {
 	return tools.ScreeningResult{
 		BusinessType:   tools.BusinessCrossBorder,
 		TraceID:        st.TraceID,
-		TransactionID:  st.Request.Transaction.TransactionID,
+		TransactionID:  st.Transaction.TransactionID,
 		FinalRiskScore: score,
 		Level:          level,
 		Primary:        st.Primary,

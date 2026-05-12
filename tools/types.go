@@ -18,14 +18,6 @@ type ScreeningRequest struct {
 	StockOrder   StockOrder             `json:"stock_order,omitempty"`
 }
 
-// NewCrossBorderScreeningRequest 由单笔跨境交易构造图入口请求（批处理/兼容旧 JSON 扁平体时可复用）。
-func NewCrossBorderScreeningRequest(txn CrossBorderTransaction) ScreeningRequest {
-	return ScreeningRequest{
-		BusinessType: BusinessCrossBorder,
-		Transaction:  txn,
-	}
-}
-
 // ResolveBusinessType 返回要执行的分支；未填时按「仅一方有有效负载」推断，否则报错要求显式指定。
 func (r ScreeningRequest) ResolveBusinessType() (string, error) {
 	bt := strings.TrimSpace(strings.ToLower(r.BusinessType))
@@ -66,14 +58,6 @@ func (r ScreeningRequest) ValidatePayload(kind string) error {
 		return nil
 	default:
 		return fmt.Errorf("invalid business kind %q", kind)
-	}
-}
-
-// ForCrossBorderGraph 返回跨境制裁图 Invoke 用请求副本（仅保留跨境相关字段）。
-func (r ScreeningRequest) ForCrossBorderGraph() ScreeningRequest {
-	return ScreeningRequest{
-		BusinessType: BusinessCrossBorder,
-		Transaction:  r.Transaction,
 	}
 }
 

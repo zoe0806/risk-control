@@ -97,9 +97,9 @@ type EdgeObservation struct {
 type PipelineState struct {
 	TraceID string `json:"trace_id"`
 
-	Request    ScreeningRequest    `json:"request"`
-	Party      *NormalizedParty    `json:"party,omitempty"`
-	Candidates []SanctionCandidate `json:"candidates,omitempty"`
+	Transaction CrossBorderTransaction `json:"transaction"`
+	Party       *NormalizedParty       `json:"party,omitempty"`
+	Candidates  []SanctionCandidate    `json:"candidates,omitempty"`
 
 	Primary   *PrimaryAssessment   `json:"primary,omitempty"`
 	Secondary *SecondaryAssessment `json:"secondary,omitempty"`
