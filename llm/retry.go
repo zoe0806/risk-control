@@ -13,12 +13,12 @@ import (
 
 // RetryConfig LLM 调用重试（指数退避 + 少量抖动）。
 type RetryConfig struct {
-	MaxAttempts int           // 含首次，例如 4 表示 1 次首次 + 3 次重试
+	MaxAttempts int // 含首次，例如 4 表示 1 次首次 + 3 次重试
 	BaseDelay   time.Duration
 	MaxDelay    time.Duration
 }
 
-// DefaultRetryConfig 演示默认值。
+// DefaultRetryConfig 默认值。
 func DefaultRetryConfig() RetryConfig {
 	return RetryConfig{
 		MaxAttempts: 4,
@@ -27,7 +27,7 @@ func DefaultRetryConfig() RetryConfig {
 	}
 }
 
-// GenerateWithRetry 包装 BaseChatModel.Generate。
+// GenerateWithRetry 带重试的模型调用
 func GenerateWithRetry(ctx context.Context, m model.BaseChatModel, msgs []*schema.Message, cfg RetryConfig) (*schema.Message, error) {
 	if cfg.MaxAttempts < 1 {
 		cfg.MaxAttempts = 1
@@ -40,17 +40,20 @@ func GenerateWithRetry(ctx context.Context, m model.BaseChatModel, msgs []*schem
 	}
 	var lastErr error
 	for attempt := 0; attempt < cfg.MaxAttempts; attempt++ {
+		//调用模型
 		out, err := m.Generate(ctx, msgs)
 		if err == nil {
 			return out, nil
 		}
 		lastErr = err
+		//重试次数达到最大次数，则返回错误
 		if attempt == cfg.MaxAttempts-1 {
 			break
 		}
 		if !isRetriable(err) {
 			return nil, err
 		}
+		//指数退避 + 少量抖动
 		d := backoffDelay(attempt, cfg.BaseDelay, cfg.MaxDelay)
 		select {
 		case <-ctx.Done():

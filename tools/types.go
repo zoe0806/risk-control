@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -16,6 +17,14 @@ type ScreeningRequest struct {
 	BusinessType string                 `json:"business_type,omitempty"`
 	Transaction  CrossBorderTransaction `json:"transaction"`
 	StockOrder   StockOrder             `json:"stock_order,omitempty"`
+}
+
+// NewCrossBorderScreeningRequest 由单笔跨境交易构造图入口请求（批处理/兼容旧 JSON 扁平体时可复用）。
+func NewCrossBorderScreeningRequest(txn CrossBorderTransaction) ScreeningRequest {
+	return ScreeningRequest{
+		BusinessType: BusinessCrossBorder,
+		Transaction:  txn,
+	}
 }
 
 // ResolveBusinessType 返回要执行的分支；未填时按「仅一方有有效负载」推断，否则报错要求显式指定。
@@ -50,10 +59,16 @@ func (r ScreeningRequest) ValidatePayload(kind string) error {
 		if strings.TrimSpace(r.StockOrder.Symbol) == "" {
 			return fmt.Errorf("stock_order.symbol is required")
 		}
+		if r.Transaction.TransactionID == "" {
+			return fmt.Errorf("transaction.transaction_id is required")
+		}
 		return nil
 	case BusinessCrossBorder:
 		if strings.TrimSpace(r.Transaction.Counterparty) == "" {
 			return fmt.Errorf("transaction.counterparty is required")
+		}
+		if r.Transaction.TransactionID == "" {
+			return fmt.Errorf("transaction.transaction_id is required")
 		}
 		return nil
 	default:
@@ -80,4 +95,16 @@ type ScreeningResult struct {
 	ReportMarkdown     string               `json:"report_markdown"`
 	TotalDurationMs    int64                `json:"total_duration_ms"`
 	PersistedAuditRows int                  `json:"persisted_audit_rows"`
+}
+
+func TruncSummary(msgs any) string {
+	b, err := json.Marshal(msgs)
+	if err != nil {
+		return ""
+	}
+	const max = 4000
+	if len(b) <= max {
+		return string(b)
+	}
+	return string(b[:max]) + "...(truncated)"
 }

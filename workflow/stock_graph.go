@@ -11,9 +11,15 @@ import (
 	"risk_control/llm"
 	"risk_control/store"
 	"risk_control/tools"
+
+	"risk_control/config"
+
+	"github.com/google/uuid"
 )
 
 const (
+	stockGraphName = "stock_risk_v1"
+
 	stIngest        = "st_ingest"
 	stNormalize     = "st_normalize"
 	stLocalGate     = "st_local_gate"
@@ -31,7 +37,7 @@ func BuildStockRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 		return nil, fmt.Errorf("workflow deps incomplete")
 	}
 	retryCfg := llm.DefaultRetryConfig()
-	thr := primaryRiskThreshold(deps.Cfg)
+	thr := primaryStockRiskThreshold(deps.Cfg)
 
 	localSG, err := BuildStockLocalGateGraph(ctx)
 	if err != nil {
@@ -41,7 +47,13 @@ func BuildStockRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 	g := compose.NewGraph[tools.StockOrder, tools.ScreeningResult]()
 
 	if err := g.AddLambdaNode(stIngest, compose.InvokableLambda(func(ctx context.Context, in tools.StockOrder) (*tools.StockPipelineState, error) {
-		return tools.NewStockPipelineState(in), nil
+		return &tools.StockPipelineState{
+			TraceID:     uuid.New().String(),
+			Order:       in,
+			Gate:        &tools.StockLocalGate{},
+			StepTimings: map[string]time.Duration{},
+			Audit:       &tools.AuditBuffer{},
+		}, nil
 	}), compose.WithNodeName(stIngest)); err != nil {
 		return nil, err
 	}
@@ -90,7 +102,7 @@ func BuildStockRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 		st.Primary = &pr
 		tools.RecordStockStep(st, stAIPrimary, t0)
 		st.Audit.AddDecision(string(tools.TaskStockPrimary), deps.Router.ModelName(tools.TaskStockPrimary),
-			truncStockSummary(msgs), raw, time.Since(t0).Milliseconds())
+			tools.TruncSummary(msgs), raw, time.Since(t0).Milliseconds())
 		return st, nil
 	}), compose.WithNodeName(stAIPrimary)); err != nil {
 		return nil, err
@@ -120,7 +132,7 @@ func BuildStockRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 		st.Secondary = &sec
 		tools.RecordStockStep(st, stAISecondary, t0)
 		st.Audit.AddDecision(string(tools.TaskStockVerify), deps.Router.ModelName(tools.TaskStockVerify),
-			truncStockSummary(msgs), raw, time.Since(t0).Milliseconds())
+			tools.TruncSummary(msgs), raw, time.Since(t0).Milliseconds())
 		return st, nil
 	}), compose.WithNodeName(stAISecondary)); err != nil {
 		return nil, err
@@ -151,7 +163,7 @@ func BuildStockRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 		st.ReportMarkdown = out.Content
 		tools.RecordStockStep(st, stAIReport, t0)
 		st.Audit.AddDecision(string(tools.TaskStockReport), deps.Router.ModelName(tools.TaskStockReport),
-			truncStockSummary(msgs), out.Content, time.Since(t0).Milliseconds())
+			tools.TruncSummary(msgs), out.Content, time.Since(t0).Milliseconds())
 		return st, nil
 	}), compose.WithNodeName(stAIReport)); err != nil {
 		return nil, err
@@ -159,12 +171,8 @@ func BuildStockRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 
 	if err := g.AddLambdaNode(stPersist, compose.InvokableLambda(func(ctx context.Context, st *tools.StockPipelineState) (tools.ScreeningResult, error) {
 		t0 := time.Now()
-		st.Audit.AddStep("stock_pipeline_snapshot", store.LogJSON(st), time.Since(t0).Milliseconds())
-		if tr := ExportFromContext(ctx); tr != nil {
-			if obs := tr.ToObservation(); obs != nil && (len(obs.NodeSpans) > 0 || len(obs.Edges) > 0) {
-				st.Audit.AddStep("graph_observation", store.LogJSON(obs), 0)
-			}
-		}
+		st.Audit.AddStep(stPersist, store.LogJSON(st), time.Since(t0).Milliseconds())
+
 		if err := deps.Store.FlushAudit(ctx, st.TraceID, st.Audit); err != nil {
 			return tools.ScreeningResult{}, err
 		}
@@ -175,6 +183,7 @@ func BuildStockRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 		return nil, err
 	}
 
+	//创建分支，黑名单命中则阻断
 	branchGate := compose.NewGraphBranch(func(ctx context.Context, st *tools.StockPipelineState) (string, error) {
 		if st.Gate != nil && st.Gate.HardBlock {
 			return stBlockedReport, nil
@@ -182,6 +191,7 @@ func BuildStockRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 		return stAIPrimary, nil
 	}, map[string]bool{stBlockedReport: true, stAIPrimary: true})
 
+	//创建分支，根据阈值结果决定是否进行AI二次验证
 	branchSecondary := compose.NewGraphBranch(func(ctx context.Context, st *tools.StockPipelineState) (string, error) {
 		if stockNeedsSecondary(st, thr) {
 			return stAISecondary, nil
@@ -208,9 +218,17 @@ func BuildStockRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 		}
 	}
 
-	return g.Compile(ctx, compose.WithGraphName("stock_risk_v1"))
+	return g.Compile(ctx, compose.WithGraphName(stockGraphName))
 }
 
+func primaryStockRiskThreshold(cfg config.Config) float64 {
+	if cfg.PrimaryStockRiskScore > 0 {
+		return cfg.PrimaryStockRiskScore
+	}
+	return 0.45
+}
+
+// stockNeedsSecondary 限制清单命中且风险评分大于0.45则强制进入AI二次验证
 func stockNeedsSecondary(st *tools.StockPipelineState, thr float64) bool {
 	if st.Primary == nil {
 		return false
@@ -277,16 +295,4 @@ func finalizeStockScreeningResult(st *tools.StockPipelineState) tools.ScreeningR
 		res.Level = "MEDIUM"
 	}
 	return res
-}
-
-func truncStockSummary(msgs any) string {
-	b, err := json.Marshal(msgs)
-	if err != nil {
-		return ""
-	}
-	const max = 4000
-	if len(b) <= max {
-		return string(b)
-	}
-	return string(b[:max]) + "...(truncated)"
 }

@@ -1,5 +1,6 @@
 package tools
 
+// AddStep 添加审计步骤
 func (b *AuditBuffer) AddStep(stepName, detailJSON string, latencyMs int64) {
 	if b == nil {
 		return
@@ -11,6 +12,7 @@ func (b *AuditBuffer) AddStep(stepName, detailJSON string, latencyMs int64) {
 	})
 }
 
+// AddDecision 添加AI决策
 func (b *AuditBuffer) AddDecision(taskKind, modelName, inputSummary, outputText string, latencyMs int64) {
 	if b == nil {
 		return

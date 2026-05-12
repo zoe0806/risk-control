@@ -11,6 +11,7 @@ import (
 	"risk_control/tools"
 )
 
+// PrimaryMessages 初筛消息
 func PrimaryMessages(st *tools.PipelineState, cfg config.Config) []*schema.Message {
 	candJSON, _ := json.Marshal(st.Candidates)
 	tx := st.Transaction
@@ -22,6 +23,7 @@ func PrimaryMessages(st *tools.PipelineState, cfg config.Config) []*schema.Messa
 	}
 }
 
+// VerifyMessages 二次验证消息
 func VerifyMessages(st *tools.PipelineState, cfg config.Config) []*schema.Message {
 	pj, _ := json.Marshal(st.Primary)
 	sys := cfg.VerifyPrompt
@@ -66,7 +68,7 @@ func mustJSON(v any) string {
 	return string(b)
 }
 
-// ExtractJSONObject 从模型输出中剥离 ```json 围栏。
+// ExtractJSONObject 从模型输出中剥离 ```json 围栏
 func ExtractJSONObject(s string) string {
 	s = strings.TrimSpace(s)
 	if strings.HasPrefix(s, "```") {
