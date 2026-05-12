@@ -13,12 +13,11 @@ import (
 	"risk_control/tools"
 
 	"risk_control/config"
-
-	"github.com/google/uuid"
 )
 
 const (
-	stockGraphName = "stock_risk_v1"
+	stockGraphName    = "stock_risk_v1"
+	stockSubgraphName = "stock_subgraph_v1"
 
 	stIngest        = "st_ingest"
 	stNormalize     = "st_normalize"
@@ -39,6 +38,7 @@ func BuildStockRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 	retryCfg := llm.DefaultRetryConfig()
 	thr := primaryStockRiskThreshold(deps.Cfg)
 
+	//构建本地子图
 	localSG, err := BuildStockLocalGateGraph(ctx)
 	if err != nil {
 		return nil, err
@@ -48,7 +48,7 @@ func BuildStockRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 
 	if err := g.AddLambdaNode(stIngest, compose.InvokableLambda(func(ctx context.Context, in tools.StockOrder) (*tools.StockPipelineState, error) {
 		return &tools.StockPipelineState{
-			TraceID:     uuid.New().String(),
+			TraceID:     tools.GetUUID(),
 			Order:       in,
 			Gate:        &tools.StockLocalGate{},
 			StepTimings: map[string]time.Duration{},
@@ -71,7 +71,8 @@ func BuildStockRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 		return nil, err
 	}
 
-	if err := g.AddGraphNode(stLocalGate, localSG, compose.WithNodeName("StockLocalGateSubgraph")); err != nil {
+	//这里使用本地子图，使用本地数据进行风控
+	if err := g.AddGraphNode(stLocalGate, localSG, compose.WithNodeName(stockSubgraphName)); err != nil {
 		return nil, err
 	}
 
@@ -80,7 +81,7 @@ func BuildStockRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 		st.ReportMarkdown = fmt.Sprintf("## 订单已阻断\n- **原因**: %s\n- **标的**: %s\n- **闸门命中**: 见审计 `stock_sub_*` 步骤。\n",
 			st.Gate.BlockReason, st.Order.Symbol)
 		tools.RecordStockStep(st, stBlockedReport, t0)
-		st.Audit.AddStep("stock_blocked_report", store.LogJSON(map[string]any{"reason": st.Gate.BlockReason}), time.Since(t0).Milliseconds())
+		st.Audit.AddStep(stBlockedReport, store.LogJSON(map[string]any{"reason": st.Gate.BlockReason}), time.Since(t0).Milliseconds())
 		return st, nil
 	}), compose.WithNodeName(stBlockedReport)); err != nil {
 		return nil, err
@@ -115,7 +116,7 @@ func BuildStockRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 		if err != nil {
 			st.Secondary = degradedStockSecondary(st, err)
 			tools.RecordStockStep(st, stAISecondary, t0)
-			st.Audit.AddStep("stock_ai_secondary_degraded", store.LogJSON(map[string]any{"error": err.Error()}), time.Since(t0).Milliseconds())
+			st.Audit.AddStep(stAISecondary, store.LogJSON(map[string]any{"error": err.Error()}), time.Since(t0).Milliseconds())
 			return st, nil
 		}
 		raw := out.Content
@@ -123,7 +124,7 @@ func BuildStockRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 		if err := json.Unmarshal([]byte(llm.ExtractJSONObject(raw)), &sec); err != nil {
 			st.Secondary = degradedStockSecondary(st, err)
 			tools.RecordStockStep(st, stAISecondary, t0)
-			st.Audit.AddStep("stock_ai_secondary_degraded", store.LogJSON(map[string]any{"error": fmt.Sprintf("json: %v", err)}), time.Since(t0).Milliseconds())
+			st.Audit.AddStep(stAISecondary, store.LogJSON(map[string]any{"error": fmt.Sprintf("json: %v", err)}), time.Since(t0).Milliseconds())
 			return st, nil
 		}
 		sec.Skipped = false

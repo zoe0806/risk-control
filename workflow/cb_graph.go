@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/cloudwego/eino/compose"
-	"github.com/google/uuid"
 
 	"risk_control/config"
 	"risk_control/llm"
@@ -48,7 +47,7 @@ func BuildCrossBorderRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Ru
 	//AddLambdaNode 注册一个节点，InvokableLambda包装一个函数，函数签名：func(ctx context.Context, in tools.CrossBorderTransaction) (*tools.PipelineState, error)
 	if err := g.AddLambdaNode(nodeIngest, compose.InvokableLambda(func(ctx context.Context, in tools.CrossBorderTransaction) (*tools.PipelineState, error) {
 		return &tools.PipelineState{
-			TraceID:     uuid.New().String(),
+			TraceID:     tools.GetUUID(),
 			Transaction: in,
 			StepTimings: map[string]time.Duration{},
 			Audit:       &tools.AuditBuffer{},
@@ -208,6 +207,7 @@ func BuildCrossBorderRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Ru
 		return nodeSkipSecondary, nil
 	}, map[string]bool{nodeAISecondary: true, nodeSkipSecondary: true})
 
+	//注册边和分支
 	//图顺序：清洗 → 归一化 → 本地候选 → AI初筛 → 分支(二次验证/跳过二次) → AI报告 → 审计 → 持久化
 	for _, step := range []struct {
 		fn func() error

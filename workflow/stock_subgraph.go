@@ -13,10 +13,10 @@ import (
 
 // 嵌套子图节点：本地闸门内部顺序（短路在节点内通过 HardBlock 跳过加重逻辑）。
 const (
-	subAbsolute     = "sub_absolute_ban"
-	subEvent        = "sub_event_ban"
-	subWatchlist    = "sub_watchlist"
-	subUnstructured = "sub_unstructured"
+	subAbsolute     = "stock_sub_absolute_ban"
+	subEvent        = "stock_sub_event_ban"
+	subWatchlist    = "stock_sub_watchlist"
+	subUnstructured = "stock_sub_unstructured"
 )
 
 // demoAbsoluteBanSymbols 演示绝对禁止（可后续换 MySQL）。
@@ -29,7 +29,7 @@ var demoWatchlistRestriction = map[string]struct{}{
 	"300346": {},
 }
 
-// BuildStockLocalGateGraph 本地与规则闸门子图：同类型进/出，就地写 st.Gate。
+// BuildStockLocalGateGraph 本地与规则闸门子图：使用本地数据进行风控
 func BuildStockLocalGateGraph(_ context.Context) (*compose.Graph[*tools.StockPipelineState, *tools.StockPipelineState], error) {
 	sg := compose.NewGraph[*tools.StockPipelineState, *tools.StockPipelineState]()
 
@@ -46,14 +46,14 @@ func BuildStockLocalGateGraph(_ context.Context) (*compose.Graph[*tools.StockPip
 		if _, banned := demoAbsoluteBanSymbols[sym]; banned {
 			st.Gate.HardBlock = true
 			st.Gate.BlockReason = "absolute_ban_list"
-			st.Gate.Hits = append(st.Gate.Hits, tools.StockGateHit{Kind: "absolute_ban", Code: sym, Detail: "标的在绝对禁止清单"})
+			st.Gate.Hits = append(st.Gate.Hits, tools.StockGateHit{Kind: tools.StockBanKindAbsolute, Code: sym, Detail: "标的在绝对禁止清单"})
 		}
 		if !st.Gate.HardBlock && strings.Contains(sym, "ST") {
 			st.Gate.HardBlock = true
 			st.Gate.BlockReason = "st_like_symbol"
-			st.Gate.Hits = append(st.Gate.Hits, tools.StockGateHit{Kind: "absolute_ban", Code: "ST_PATTERN", Detail: "代码含 ST 片段，演示硬拦截"})
+			st.Gate.Hits = append(st.Gate.Hits, tools.StockGateHit{Kind: tools.StockBanKindAbsolute, Code: "ST_PATTERN", Detail: "代码含 ST 片段，硬拦截"})
 		}
-		st.Audit.AddStep("stock_"+subAbsolute, store.LogJSON(st.Gate), time.Since(t0).Milliseconds())
+		st.Audit.AddStep(subAbsolute, store.LogJSON(st.Gate), time.Since(t0).Milliseconds())
 		tools.RecordStockStep(st, subAbsolute, t0)
 		return st, nil
 	}), compose.WithNodeName(subAbsolute)); err != nil {
@@ -72,9 +72,9 @@ func BuildStockLocalGateGraph(_ context.Context) (*compose.Graph[*tools.StockPip
 		if st.Order.Flags.BeforeEarnings {
 			st.Gate.HardBlock = true
 			st.Gate.BlockReason = "event_earnings_window"
-			st.Gate.Hits = append(st.Gate.Hits, tools.StockGateHit{Kind: "event_ban", Code: "EARNINGS", Detail: "财报窗口内禁止（演示）"})
+			st.Gate.Hits = append(st.Gate.Hits, tools.StockGateHit{Kind: tools.StockBanKindEvent, Code: "EARNINGS", Detail: "财报窗口内禁止"})
 		}
-		st.Audit.AddStep("stock_"+subEvent, store.LogJSON(map[string]any{"hard_block": st.Gate.HardBlock}), time.Since(t0).Milliseconds())
+		st.Audit.AddStep(subEvent, store.LogJSON(map[string]any{"hard_block": st.Gate.HardBlock}), time.Since(t0).Milliseconds())
 		tools.RecordStockStep(st, subEvent, t0)
 		return st, nil
 	}), compose.WithNodeName(subEvent)); err != nil {
@@ -93,9 +93,9 @@ func BuildStockLocalGateGraph(_ context.Context) (*compose.Graph[*tools.StockPip
 		sym := st.Norm.SymbolKey
 		if _, rest := demoWatchlistRestriction[sym]; rest {
 			st.Gate.ForceAIReview = true
-			st.Gate.Hits = append(st.Gate.Hits, tools.StockGateHit{Kind: "watchlist", Code: sym, Detail: "内部限制清单命中，强制进入 AI 初筛"})
+			st.Gate.Hits = append(st.Gate.Hits, tools.StockGateHit{Kind: tools.StockBanKindWatchlist, Code: sym, Detail: "内部限制清单命中，强制进入 AI 初筛"})
 		}
-		st.Audit.AddStep("stock_"+subWatchlist, store.LogJSON(map[string]any{"force_ai": st.Gate.ForceAIReview}), time.Since(t0).Milliseconds())
+		st.Audit.AddStep(subWatchlist, store.LogJSON(map[string]any{"force_ai": st.Gate.ForceAIReview}), time.Since(t0).Milliseconds())
 		tools.RecordStockStep(st, subWatchlist, t0)
 		return st, nil
 	}), compose.WithNodeName(subWatchlist)); err != nil {
@@ -117,7 +117,7 @@ func BuildStockLocalGateGraph(_ context.Context) (*compose.Graph[*tools.StockPip
 		}
 		if len(st.Order.NewsSummary) > 80 {
 			score += 0.25
-			st.Gate.Hits = append(st.Gate.Hits, tools.StockGateHit{Kind: "unstructured", Code: "NEWS_LEN", Detail: "舆情/公告摘要较长，提高本地关注分（演示启发式）"})
+			st.Gate.Hits = append(st.Gate.Hits, tools.StockGateHit{Kind: tools.StockBanKindUnstructured, Code: "NEWS_LEN", Detail: "舆情/公告摘要较长，提高本地关注分"})
 		}
 		if score > 0.55 {
 			st.Gate.LocalNeedsDeepReview = true
@@ -129,7 +129,7 @@ func BuildStockLocalGateGraph(_ context.Context) (*compose.Graph[*tools.StockPip
 			score = 1
 		}
 		st.Gate.LocalRiskScore = score
-		st.Audit.AddStep("stock_"+subUnstructured, store.LogJSON(map[string]any{"local_risk": score, "need_deep": st.Gate.LocalNeedsDeepReview}), time.Since(t0).Milliseconds())
+		st.Audit.AddStep(subUnstructured, store.LogJSON(map[string]any{"local_risk": score, "need_deep": st.Gate.LocalNeedsDeepReview}), time.Since(t0).Milliseconds())
 		tools.RecordStockStep(st, subUnstructured, t0)
 		return st, nil
 	}), compose.WithNodeName(subUnstructured)); err != nil {

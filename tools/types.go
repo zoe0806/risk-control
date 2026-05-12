@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // 统一入口 JSON 的业务域（与 HTTP /v1/screen 的 ScreeningRequest 对齐）。
@@ -107,4 +109,8 @@ func TruncSummary(msgs any) string {
 		return string(b)
 	}
 	return string(b[:max]) + "...(truncated)"
+}
+
+func GetUUID() string {
+	return uuid.New().String()
 }

@@ -36,11 +36,20 @@ type NormalizedStockOrder struct {
 	TimestampMs int64   `json:"timestamp_ms"`
 }
 
+type StockBanKind string
+
+const (
+	StockBanKindAbsolute     StockBanKind = "absolute_ban" //标的在绝对禁止清单
+	StockBanKindEvent        StockBanKind = "event_ban"    //财报窗口内禁止
+	StockBanKindWatchlist    StockBanKind = "watchlist"    //内部限制清单命中，强制进入 AI 初筛
+	StockBanKindUnstructured StockBanKind = "unstructured" //舆情/公告摘要较长，提高本地关注分（演示启发式）
+)
+
 // StockGateHit 名单或规则命中说明。
 type StockGateHit struct {
-	Kind   string `json:"kind"` // absolute_ban | event_ban | watchlist | unstructured
-	Code   string `json:"code,omitempty"`
-	Detail string `json:"detail,omitempty"`
+	Kind   StockBanKind `json:"kind"` // absolute_ban | event_ban | watchlist | unstructured
+	Code   string       `json:"code,omitempty"`
+	Detail string       `json:"detail,omitempty"`
 }
 
 // StockLocalGate 嵌套子图「本地与规则闸门」输出（短路优先语义）。
