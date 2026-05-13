@@ -24,7 +24,6 @@ go build -o demo .
 |------|------|------|
 | `GET` | `/health` | — |
 | `POST` | `/v1/screen` | `ScreeningRequest`：`business_type` 为 `cross_border` 或 `stock`，对应填 `transaction` 或 `stock_order` |
-| `POST` | `/v1/screen/batch` | `CrossBorderTransaction` 的 **JSON 数组**（仅跨境批处理） |
 
 **跨境**单笔示例：
 

@@ -200,6 +200,7 @@ func BuildStockRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 		return stSkipSecondary, nil
 	}, map[string]bool{stAISecondary: true, stSkipSecondary: true})
 
+	//注册边和分支
 	for _, step := range []struct {
 		fn func() error
 	}{
