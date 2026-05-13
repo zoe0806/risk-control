@@ -5,7 +5,7 @@
 ## 架构要点
 
 - **`workflow.RiskEngine`**：`EvaluateStockOrder`、`EvaluateCrossBorderTransaction`、`EvaluateScreeningRequest`（按 `business_type` 分发）。
-- **`workflow/cb_graph.go`** / **`workflow/stock_graph.go`**：`compose.NewGraph` + Lambda + 分支；观测见 **`workflow/observability.go`**（`graph_observation` 落 `audit_log`）。
+- **`workflow/cb_graph.go`** / **`workflow/stock_graph.go`**：`compose.NewGraph` + Lambda + 分支；观测见 **`workflow/observability.go`。
 - **统一响应**：`tools.ScreeningResult`（含 `business_type`、`transaction_id`；股票场景下 `transaction_id` 为订单号，阻断见 `blocked` / `block_reason`）。
 
 ## 配置与运行
