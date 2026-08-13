@@ -2,7 +2,7 @@
 
 通用多业务风控编排：跨境制裁与股票订单共用同一 Orchestrator，领域差异在 Domain Profile / 策略包。
 
-深度 LLM 已从编排内核拆出。默认 `native`（本进程调 DeepSeek）。**不会自动扫描本机有没有 Codex**；要接 Codex，把 `deepRuntime.kind` 改成 `codex` 后重启服务。
+深度 LLM 已从编排内核拆出。默认 `native`（本进程调 DeepSeek）。
 
 ## 架构
 
