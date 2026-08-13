@@ -1,0 +1,32 @@
+{
+  "domain": "stock",
+  "version": "pack_stock_v1",
+  "stock": {
+    "trustedAccounts": ["VIP_ACCT_01"],
+    "absoluteBanSymbols": ["300136"],
+    "watchlistSymbols": ["300346"],
+    "velocityWindowSec": 60,
+    "velocityMaxCount": 30,
+    "maxNotional": 5000000
+  },
+  "lightWeights": {
+    "bias": -1.0,
+    "amount": 1.2,
+    "countryHighRisk": 0.8,
+    "countryBlocked": 2.5,
+    "nameTokens": 0.02,
+    "purposeLen": 0.003,
+    "graphCluster": 0.7
+  },
+  "orchestrator": {
+    "deepTimeoutMs": 10000,
+    "circuitFailureThreshold": 5,
+    "circuitOpenSec": 30,
+    "shadowEnabled": true,
+    "asyncCaseDraft": true,
+    "lightReviewThreshold": 0.4,
+    "lightRejectThreshold": 0.8,
+    "graphSharedDeviceReview": 4,
+    "graphClusterReject": 12
+  }
+}

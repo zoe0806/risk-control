@@ -38,8 +38,10 @@ type Config struct {
 
 	// Orchestrator 阶段3/4 多引擎编排（也可被 policies 热更新覆盖）。
 	Orchestrator OrchestratorConfig `json:"orchestrator"`
-	PolicyPackPath string           `json:"policyPackPath"`
+	PolicyPackPath string           `json:"policyPackPath"` // 兼容：默认跨境主包
 	ShadowPackPath string           `json:"shadowPackPath"`
+	// DomainPolicies 按业务线配置主/影子策略包（优先于上面的兼容字段）。
+	DomainPolicies map[string]DomainPolicyPaths `json:"domainPolicies"`
 }
 
 // OrchestratorConfig 预分析路由 / 深度超时 / 熔断 / 影子。

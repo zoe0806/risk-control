@@ -23,7 +23,7 @@ type GraphDeps struct {
 	Graph    *EntityGraph
 }
 
-// RiskEngine 多业务风控：编排器 + 各域 Runnable。
+// RiskEngine 多业务风控：通用编排器 + 域 Profile + 深度图。
 type RiskEngine struct {
 	stockGraph compose.Runnable[tools.StockOrder, tools.ScreeningResult]
 	cbGraph    compose.Runnable[tools.CrossBorderTransaction, tools.ScreeningResult]
@@ -32,12 +32,14 @@ type RiskEngine struct {
 	cfg        config.Config
 	velocity   *VelocityTracker
 	policies   *PolicyHub
+	policyReg  *PolicyRegistry
+	profiles   map[string]DomainProfile
 	graph      *EntityGraph
 	breaker    *CircuitBreaker
 	metrics    *EngineMetrics
 }
 
-// NewRiskEngine 基于共享依赖编译股票图与跨境图，并启动编排组件。
+// NewRiskEngine 编译各域深度图并注册 DomainProfile。
 func NewRiskEngine(ctx context.Context, deps *GraphDeps) (*RiskEngine, error) {
 	if deps == nil {
 		return nil, fmt.Errorf("graph deps is nil")
@@ -51,19 +53,9 @@ func NewRiskEngine(ctx context.Context, deps *GraphDeps) (*RiskEngine, error) {
 	if deps.Graph == nil {
 		deps.Graph = NewEntityGraph()
 	}
-	// 若配置了主策略包路径，启动时加载覆盖
-	if deps.Cfg.PolicyPackPath != "" {
-		if _, err := deps.Policies.ReloadPrimary(deps.Cfg.PolicyPackPath); err != nil {
-			return nil, fmt.Errorf("load policy pack: %w", err)
-		}
-	}
-	if deps.Cfg.ShadowPackPath != "" {
-		if _, err := deps.Policies.ReloadShadow(deps.Cfg.ShadowPackPath); err != nil {
-			// 影子失败不阻断启动
-			fmt.Printf("warn: shadow pack: %v\n", err)
-		}
-	}
-	orch := deps.Policies.Primary().Orchestrator
+	reg := deps.Policies.Registry()
+	orch := reg.Primary(tools.BusinessCrossBorder).Orchestrator
+
 	stockGraph, err := BuildStockRiskGraph(ctx, deps)
 	if err != nil {
 		return nil, fmt.Errorf("stock risk graph: %w", err)
@@ -72,7 +64,7 @@ func NewRiskEngine(ctx context.Context, deps *GraphDeps) (*RiskEngine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cross border risk graph: %w", err)
 	}
-	return &RiskEngine{
+	eng := &RiskEngine{
 		stockGraph: stockGraph,
 		cbGraph:    cbGraph,
 		store:      deps.Store,
@@ -80,13 +72,18 @@ func NewRiskEngine(ctx context.Context, deps *GraphDeps) (*RiskEngine, error) {
 		cfg:        deps.Cfg,
 		velocity:   deps.Velocity,
 		policies:   deps.Policies,
-		graph:      deps.Graph,
-		breaker:    NewCircuitBreaker(orch.CircuitFailureThreshold, time.Duration(orch.CircuitOpenSec)*time.Second),
-		metrics:    &EngineMetrics{},
-	}, nil
+		policyReg:  reg,
+		profiles: map[string]DomainProfile{
+			tools.BusinessCrossBorder: crossBorderProfile{},
+			tools.BusinessStock:       stockProfile{},
+		},
+		graph:   deps.Graph,
+		breaker: NewCircuitBreaker(orch.CircuitFailureThreshold, time.Duration(orch.CircuitOpenSec)*time.Second),
+		metrics: &EngineMetrics{},
+	}
+	return eng, nil
 }
 
-// Store 暴露案例工作流等读写。
 func (e *RiskEngine) Store() store.Store {
 	if e == nil {
 		return nil
@@ -94,7 +91,6 @@ func (e *RiskEngine) Store() store.Store {
 	return e.store
 }
 
-// Policies 策略热更新入口。
 func (e *RiskEngine) Policies() *PolicyHub {
 	if e == nil {
 		return nil
@@ -102,7 +98,13 @@ func (e *RiskEngine) Policies() *PolicyHub {
 	return e.policies
 }
 
-// Metrics 引擎计数。
+func (e *RiskEngine) PolicyRegistry() *PolicyRegistry {
+	if e == nil {
+		return nil
+	}
+	return e.policyReg
+}
+
 func (e *RiskEngine) Metrics() map[string]any {
 	if e == nil {
 		return nil
@@ -111,15 +113,13 @@ func (e *RiskEngine) Metrics() map[string]any {
 		"engines": e.metrics.Snapshot(),
 		"circuit": e.breaker.Stats(),
 	}
-	if e.policies != nil {
-		if p := e.policies.Primary(); p != nil {
-			out["pack_version"] = p.Version
-		}
+	if e.policyReg != nil {
+		out["policies"] = e.policyReg.Snapshot()
 	}
 	return out
 }
 
-// EvaluateScreeningRequest 统一入口：股票走原图；跨境走多引擎编排。
+// EvaluateScreeningRequest 统一入口：按 business_type 选择 DomainProfile 走通用编排。
 func (e *RiskEngine) EvaluateScreeningRequest(ctx context.Context, req tools.ScreeningRequest, opts ...compose.Option) (tools.ScreeningResult, error) {
 	kind, err := req.ResolveBusinessType()
 	if err != nil {
@@ -128,11 +128,15 @@ func (e *RiskEngine) EvaluateScreeningRequest(ctx context.Context, req tools.Scr
 	if err := req.ValidatePayload(kind); err != nil {
 		return tools.ScreeningResult{}, err
 	}
+	profile, ok := e.profiles[kind]
+	if !ok {
+		return tools.ScreeningResult{}, fmt.Errorf("no domain profile for %q", kind)
+	}
 	switch kind {
 	case tools.BusinessStock:
-		return e.stockGraph.Invoke(ctx, req.StockOrder, opts...)
+		return e.Orchestrate(ctx, profile, req.StockOrder, opts...)
 	case tools.BusinessCrossBorder:
-		return e.OrchestrateCrossBorder(ctx, req.Transaction, opts...)
+		return e.Orchestrate(ctx, profile, req.Transaction, opts...)
 	default:
 		return tools.ScreeningResult{}, fmt.Errorf("unreachable business kind %q", kind)
 	}

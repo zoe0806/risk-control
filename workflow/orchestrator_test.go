@@ -50,14 +50,11 @@ func TestEntityGraphSharedDevice(t *testing.T) {
 	g := NewEntityGraph()
 	orch := config.Config{}.Orch()
 	orch.GraphSharedDeviceReview = 2
-	txn := tools.CrossBorderTransaction{DeviceID: "d1", AccountID: "a1", BankName: "B"}
-	p1 := tools.NormalizePartyName("Alpha", "US")
-	_, dec1, _, _ := g.Observe(txn, p1, orch)
+	_, dec1, _, _ := g.ObserveLinks([]string{"party:Alpha", "dev:d1"}, "d1", "Alpha", orch)
 	if dec1 != tools.DecisionApprove {
 		t.Fatalf("first=%s", dec1)
 	}
-	p2 := tools.NormalizePartyName("Beta", "US")
-	_, dec2, detail, pols := g.Observe(txn, p2, orch)
+	_, dec2, detail, pols := g.ObserveLinks([]string{"party:Beta", "dev:d1"}, "d1", "Beta", orch)
 	if dec2 != tools.DecisionReview {
 		t.Fatalf("second=%s detail=%s", dec2, detail)
 	}
@@ -103,5 +100,30 @@ func TestRunRuleEngineWhitelist(t *testing.T) {
 	}, pack, NewVelocityTracker(), store.Noop{}, false)
 	if !res.EarlyExit || res.Decision != tools.DecisionApprove {
 		t.Fatalf("%+v", res)
+	}
+}
+
+func TestStockLocalRulesBan(t *testing.T) {
+	rules := config.Config{}.StockRulesOrDefault(config.StockRules{})
+	st := &tools.StockPipelineState{
+		Order: tools.StockOrder{Symbol: "300136", Side: "BUY", Quantity: 100, Price: 10},
+		Gate:  &tools.StockLocalGate{},
+	}
+	norm, _ := tools.NormalizeStockOrder(st.Order)
+	st.Norm = norm
+	ApplyStockLocalRules(st, rules, NewVelocityTracker())
+	dec, early, _ := StockRuleDecision(st, rules)
+	if !early || dec != tools.DecisionReject || !st.Gate.HardBlock {
+		t.Fatalf("dec=%s early=%v gate=%+v", dec, early, st.Gate)
+	}
+}
+
+func TestStockPreAnalyzeTrusted(t *testing.T) {
+	rules := config.StockRules{TrustedAccounts: []string{"VIP"}, AbsoluteBanSymbols: []string{"300136"}}
+	order := tools.StockOrder{Symbol: "600519", AccountID: "VIP", Quantity: 1, Price: 10}
+	norm, _ := tools.NormalizeStockOrder(order)
+	pa := PreAnalyzeStock(order, norm, rules, config.Config{}.Orch())
+	if pa.Bucket != tools.BucketFast {
+		t.Fatalf("bucket=%s", pa.Bucket)
 	}
 }

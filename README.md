@@ -1,16 +1,21 @@
 # risk_control
 
-基于 **CloudWeGo Eino** 的风控编排示例：**跨境制裁筛查**与**股票订单**两条流水线；模型 **DeepSeek**（OpenAI 兼容），审计与名单可走 **MySQL**。
+基于 **CloudWeGo Eino** 的**通用多业务风控编排**：跨境制裁与股票订单共用同一 Orchestrator，领域差异在 Domain Profile / 策略包。
 
-## 架构要点
+## 架构
 
-- **阶段1–2**：本地漏斗、决策码、名单版本、人工案例。
-- **阶段3**：预分析路由 → `rule` / `light_ml` / `entity_graph` → 仲裁 → 可选深度 `cb_graph`（超时熔断降级）；策略包热更新。
-- **阶段4**：轻量线性模型、实体关联图、影子策略对比、REVIEW 异步案例草稿。
+```text
+EvaluateScreeningRequest
+  → DomainProfile(cross_border | stock)
+  → Orchestrate：预分析 → rule / light_ml / entity_graph → 仲裁
+  → 可选 deep 图（cb_graph / stock_graph）+ 熔断降级 + 影子
+```
 
-## 配置与运行
+- 通用：`decision`、案例、热更新、指标、熔断、影子
+- 跨境专用：制裁名单、国家走廊、对手方匹配
+- 股票专用：禁买/ST、财报窗口、名义本金、账户频次
 
-根目录 **`config.json`** + **`policies/cross_border.json`**（主策略）/ **`policies/shadow.json`**（影子）：
+## 运行
 
 ```bash
 cd risk_control
@@ -18,21 +23,18 @@ go build -o demo .
 ./demo
 ```
 
+策略包：`policies/cross_border.json`、`policies/stock.json`（及对应 shadow）。
+
 ## HTTP
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `GET` | `/health` | 健康检查 |
 | `POST` | `/v1/screen` | 统一筛查 |
-| `GET` | `/v1/cases` | 待复核案例 |
-| `GET` | `/v1/cases/{id}` | 案例详情（含 `draft_markdown`） |
-| `POST` | `/v1/cases/{id}/resolve` | 人工终裁 |
-| `GET` | `/v1/admin/policies` | 主/影子策略快照 |
-| `POST` | `/v1/admin/policies/reload` | 热加载 `{"target":"primary\|shadow","path":"..."}` |
-| `GET` | `/v1/admin/metrics` | 路由/深度/熔断/影子计数 |
-
-响应含 `decision`、`route_bucket`、`engines`、`pack_version`、`degraded` 等字段。
+| `GET/POST` | `/v1/cases...` | 人工复核 |
+| `GET` | `/v1/admin/policies` | 各域策略快照 |
+| `POST` | `/v1/admin/policies/reload` | `{"domain":"stock\|cross_border","target":"primary\|shadow","path":"..."}` |
+| `GET` | `/v1/admin/metrics` | 编排指标 |
 
 ## 免责声明
 
-演示数据与策略不构成正式合规结论；上线前须独立评审。
+演示数据与策略不构成正式合规结论。

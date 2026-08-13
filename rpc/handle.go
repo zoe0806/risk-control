@@ -145,13 +145,14 @@ func Policies(w http.ResponseWriter, r *http.Request, eng *workflow.RiskEngine) 
 }
 
 type reloadReq struct {
+	Domain string `json:"domain"` // cross_border | stock，默认 cross_border
 	Target string `json:"target"` // primary | shadow
 	Path   string `json:"path"`
 }
 
 // ReloadPolicies POST 热加载策略包，无需重启。
 func ReloadPolicies(w http.ResponseWriter, r *http.Request, eng *workflow.RiskEngine) {
-	if eng == nil || eng.Policies() == nil {
+	if eng == nil || eng.PolicyRegistry() == nil {
 		http.Error(w, "policies not configured", http.StatusInternalServerError)
 		return
 	}
@@ -164,23 +165,15 @@ func ReloadPolicies(w http.ResponseWriter, r *http.Request, eng *workflow.RiskEn
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	domain := strings.TrimSpace(req.Domain)
+	if domain == "" {
+		domain = tools.BusinessCrossBorder
+	}
 	target := strings.ToLower(strings.TrimSpace(req.Target))
 	if target == "" {
 		target = "primary"
 	}
-	var (
-		pack *workflow.PolicyPack
-		err  error
-	)
-	switch target {
-	case "primary":
-		pack, err = eng.Policies().ReloadPrimary(req.Path)
-	case "shadow":
-		pack, err = eng.Policies().ReloadShadow(req.Path)
-	default:
-		http.Error(w, "target must be primary or shadow", http.StatusBadRequest)
-		return
-	}
+	pack, err := eng.PolicyRegistry().Reload(domain, target, req.Path)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

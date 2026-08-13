@@ -8,17 +8,17 @@ import (
 	"risk_control/tools"
 )
 
-// EntityGraph 简易关联图：账户/设备/IP/对手/银行多跳聚集（阶段4）。
+// EntityGraph 简易关联图：多跳实体共现（业务无关）。
 type EntityGraph struct {
-	mu    sync.Mutex
-	adj   map[string]map[string]int // undirected weighted
-	partyDevices map[string]map[string]struct{} // party -> devices
+	mu           sync.Mutex
+	adj          map[string]map[string]int
+	deviceSubjects map[string]map[string]struct{} // device -> subject keys
 }
 
 func NewEntityGraph() *EntityGraph {
 	return &EntityGraph{
-		adj:          make(map[string]map[string]int),
-		partyDevices: make(map[string]map[string]struct{}),
+		adj:           make(map[string]map[string]int),
+		deviceSubjects: make(map[string]map[string]struct{}),
 	}
 }
 
@@ -36,57 +36,51 @@ func (g *EntityGraph) link(a, b string) {
 	g.adj[b][a]++
 }
 
-// Observe 写入一笔交易的实体边，返回聚集风险信号。
-func (g *EntityGraph) Observe(txn tools.CrossBorderTransaction, party *tools.NormalizedParty, orch config.OrchestratorConfig) (score float64, decision string, detail string, policies []string) {
+// ObserveLinks 写入节点边并评估聚集风险。
+// deviceID 非空时统计「同设备多主体」；subjectKey 为对手方或标的。
+func (g *EntityGraph) ObserveLinks(nodes []string, deviceID, subjectKey string, orch config.OrchestratorConfig) (score float64, decision string, detail string, policies []string) {
 	if g == nil {
 		return 0, tools.DecisionApprove, "graph_disabled", nil
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	partyKey := ""
-	if party != nil {
-		partyKey = "party:" + party.NormalizedKey
+	clean := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		n = strings.TrimSpace(n)
+		if n != "" {
+			clean = append(clean, n)
+		}
 	}
-	acct := prefix("acct", txn.AccountID)
-	dev := prefix("dev", txn.DeviceID)
-	ip := prefix("ip", txn.ClientIP)
-	bank := prefix("bank", strings.ToUpper(strings.TrimSpace(txn.BankName)))
-
-	nodes := []string{partyKey, acct, dev, ip, bank}
-	for i := 0; i < len(nodes); i++ {
-		for j := i + 1; j < len(nodes); j++ {
-			g.link(nodes[i], nodes[j])
+	for i := 0; i < len(clean); i++ {
+		for j := i + 1; j < len(clean); j++ {
+			g.link(clean[i], clean[j])
 		}
 	}
 
-	sharedParties := 0
-	if txn.DeviceID != "" && party != nil {
-		dk := txn.DeviceID
-		if g.partyDevices[dk] == nil {
-			g.partyDevices[dk] = map[string]struct{}{}
+	sharedSubjects := 0
+	if deviceID != "" && subjectKey != "" {
+		if g.deviceSubjects[deviceID] == nil {
+			g.deviceSubjects[deviceID] = map[string]struct{}{}
 		}
-		g.partyDevices[dk][party.NormalizedKey] = struct{}{}
-		sharedParties = len(g.partyDevices[dk])
+		g.deviceSubjects[deviceID][subjectKey] = struct{}{}
+		sharedSubjects = len(g.deviceSubjects[deviceID])
 	}
 
-	degree := 0
-	if partyKey != "" {
-		degree = len(g.adj[partyKey])
-	}
-	// 1-hop cluster size around account
-	cluster := degree
-	if acct != "" {
-		cluster = max(cluster, len(g.adj[acct]))
+	cluster := 0
+	for _, n := range clean {
+		if d := len(g.adj[n]); d > cluster {
+			cluster = d
+		}
 	}
 
 	score = 0.05
 	decision = tools.DecisionApprove
 	detail = "graph_ok"
-	if sharedParties >= orch.GraphSharedDeviceReview {
+	if sharedSubjects >= orch.GraphSharedDeviceReview {
 		score = 0.45
 		decision = tools.DecisionReview
-		detail = "shared_device_multi_party"
+		detail = "shared_device_multi_subject"
 		policies = append(policies, tools.PolicyEntityGraph)
 	}
 	if cluster >= orch.GraphClusterReject {
@@ -98,7 +92,25 @@ func (g *EntityGraph) Observe(txn tools.CrossBorderTransaction, party *tools.Nor
 	return score, decision, detail, policies
 }
 
-func prefix(kind, id string) string {
+// ObserveCB 跨境便捷封装（兼容旧调用）。
+func (g *EntityGraph) ObserveCB(txn tools.CrossBorderTransaction, party *tools.NormalizedParty, orch config.OrchestratorConfig) (float64, string, string, []string) {
+	partyKey := ""
+	subject := ""
+	if party != nil {
+		partyKey = "party:" + party.NormalizedKey
+		subject = party.NormalizedKey
+	}
+	nodes := []string{
+		partyKey,
+		prefixNode("acct", txn.AccountID),
+		prefixNode("dev", txn.DeviceID),
+		prefixNode("ip", txn.ClientIP),
+		prefixNode("bank", strings.ToUpper(strings.TrimSpace(txn.BankName))),
+	}
+	return g.ObserveLinks(nodes, txn.DeviceID, subject, orch)
+}
+
+func prefixNode(kind, id string) string {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return ""

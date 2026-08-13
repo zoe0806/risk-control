@@ -7,6 +7,7 @@ import (
 
 	"github.com/cloudwego/eino/compose"
 
+	"risk_control/config"
 	"risk_control/store"
 	"risk_control/tools"
 )
@@ -19,18 +20,20 @@ const (
 	subUnstructured = "stock_sub_unstructured"
 )
 
-// demoAbsoluteBanSymbols 演示绝对禁止（可后续换 MySQL）。
-var demoAbsoluteBanSymbols = map[string]struct{}{
-	"300136": {},
-}
+// BuildStockLocalGateGraph 本地与规则闸门子图：规则来自策略包（可热更新）。
+func BuildStockLocalGateGraph(_ context.Context, deps *GraphDeps) (*compose.Graph[*tools.StockPipelineState, *tools.StockPipelineState], error) {
+	liveStock := func() config.StockRules {
+		if deps != nil && deps.Policies != nil && deps.Policies.Registry() != nil {
+			if p := deps.Policies.Registry().Primary(tools.BusinessStock); p != nil {
+				return p.Stock
+			}
+		}
+		if deps != nil {
+			return deps.Cfg.StockRulesOrDefault(config.StockRules{})
+		}
+		return config.Config{}.StockRulesOrDefault(config.StockRules{})
+	}
 
-// demoWatchlistRestriction 演示「限制清单」→ 强制 AI 复核。
-var demoWatchlistRestriction = map[string]struct{}{
-	"300346": {},
-}
-
-// BuildStockLocalGateGraph 本地与规则闸门子图：使用本地数据进行风控
-func BuildStockLocalGateGraph(_ context.Context) (*compose.Graph[*tools.StockPipelineState, *tools.StockPipelineState], error) {
 	sg := compose.NewGraph[*tools.StockPipelineState, *tools.StockPipelineState]()
 
 	if err := sg.AddLambdaNode(subAbsolute, compose.InvokableLambda(func(ctx context.Context, st *tools.StockPipelineState) (*tools.StockPipelineState, error) {
@@ -42,8 +45,9 @@ func BuildStockLocalGateGraph(_ context.Context) (*compose.Graph[*tools.StockPip
 			tools.RecordStockStep(st, subAbsolute, t0)
 			return st, nil
 		}
+		rules := liveStock()
 		sym := st.Norm.SymbolKey
-		if _, banned := demoAbsoluteBanSymbols[sym]; banned {
+		if setInList(rules.AbsoluteBanSymbols, sym) {
 			st.Gate.HardBlock = true
 			st.Gate.BlockReason = "absolute_ban_list"
 			st.Gate.Hits = append(st.Gate.Hits, tools.StockGateHit{Kind: tools.StockBanKindAbsolute, Code: sym, Detail: "标的在绝对禁止清单"})
@@ -91,7 +95,7 @@ func BuildStockLocalGateGraph(_ context.Context) (*compose.Graph[*tools.StockPip
 			return st, nil
 		}
 		sym := st.Norm.SymbolKey
-		if _, rest := demoWatchlistRestriction[sym]; rest {
+		if setInList(liveStock().WatchlistSymbols, sym) {
 			st.Gate.ForceAIReview = true
 			st.Gate.Hits = append(st.Gate.Hits, tools.StockGateHit{Kind: tools.StockBanKindWatchlist, Code: sym, Detail: "内部限制清单命中，强制进入 AI 初筛"})
 		}

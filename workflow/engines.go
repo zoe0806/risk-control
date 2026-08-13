@@ -5,23 +5,29 @@ import (
 	"fmt"
 	"time"
 
-	"risk_control/config"
 	"risk_control/store"
 	"risk_control/tools"
 )
 
-// EngineResult 单引擎输出。
+// EngineResult 单引擎输出（业务无关）。
 type EngineResult struct {
-	Engine    string
-	Decision  string
-	Score     float64
-	PolicyIDs []string
-	Rationale string
-	LatencyMs int64
-	Degraded  bool
-	EarlyExit bool // 规则引擎可终结整笔
-	Gate      *tools.CBLocalGate
-	State     *tools.PipelineState // rule 路径可带状态
+	Engine         string
+	Decision       string
+	Score          float64
+	PolicyIDs      []string
+	Rationale      string
+	LatencyMs      int64
+	Degraded       bool
+	EarlyExit      bool
+	TraceID        string
+	ListVersion    string
+	Primary        *tools.PrimaryAssessment
+	ReportMarkdown string
+	Audit          *tools.AuditBuffer
+	Blocked        bool
+	BlockReason    string
+	// 跨境深度路由辅助
+	SkipAI bool
 }
 
 func (r EngineResult) Trace() tools.EngineTrace {
@@ -36,7 +42,25 @@ func (r EngineResult) Trace() tools.EngineTrace {
 	}
 }
 
-// RunRuleEngine 确定性规则（复用 fast_filter；可选名单精排）。
+func engineFromPipeline(ps *tools.PipelineState, early bool, rationale string, t0 time.Time) EngineResult {
+	return EngineResult{
+		Engine:         tools.EngineRule,
+		Decision:       ps.Decision,
+		Score:          scoreFromState(ps),
+		PolicyIDs:      append([]string{}, ps.PolicyIDs...),
+		Rationale:      rationale,
+		LatencyMs:      time.Since(t0).Milliseconds(),
+		EarlyExit:      early,
+		TraceID:        ps.TraceID,
+		ListVersion:    ps.ListVersion,
+		Primary:        ps.Primary,
+		ReportMarkdown: ps.ReportMarkdown,
+		Audit:          ps.Audit,
+		SkipAI:         ps.Gate != nil && ps.Gate.SkipAI,
+	}
+}
+
+// RunRuleEngine 跨境确定性规则。
 func RunRuleEngine(ctx context.Context, txn tools.CrossBorderTransaction, pack *PolicyPack, vel *VelocityTracker, st store.Store, withSanctions bool) EngineResult {
 	t0 := time.Now()
 	rules := pack.CrossBorder
@@ -55,17 +79,7 @@ func RunRuleEngine(ctx context.Context, txn tools.CrossBorderTransaction, pack *
 	ApplyFastFilter(ps, rules, vel)
 	if ps.Gate.EarlyExit {
 		ApplyRuleDecision(ps)
-		return EngineResult{
-			Engine:    tools.EngineRule,
-			Decision:  ps.Decision,
-			Score:     scoreFromState(ps),
-			PolicyIDs: append([]string{}, ps.PolicyIDs...),
-			Rationale: "rule_early_exit",
-			LatencyMs: time.Since(t0).Milliseconds(),
-			EarlyExit: true,
-			Gate:      ps.Gate,
-			State:     ps,
-		}
+		return engineFromPipeline(ps, true, "rule_early_exit", t0)
 	}
 	if withSanctions {
 		hits, err := st.SearchSanctions(ctx, party, rules.CandidateLimit*3)
@@ -78,24 +92,16 @@ func RunRuleEngine(ctx context.Context, txn tools.CrossBorderTransaction, pack *
 				Rationale: "sanctions_search_error: " + err.Error(),
 				LatencyMs: time.Since(t0).Milliseconds(),
 				Degraded:  true,
-				State:     ps,
+				TraceID:   ps.TraceID,
+				Audit:     ps.Audit,
 			}
 		}
 		ps.Candidates = tools.RankCandidates(party, hits, rules.FuzzyMatchMinScore, rules.CandidateLimit)
 		ApplyMatchRouting(ps, rules)
 		if ps.Gate.SkipAI || ps.Gate.AutoReject {
 			ApplyRuleDecision(ps)
-			return EngineResult{
-				Engine:    tools.EngineRule,
-				Decision:  ps.Decision,
-				Score:     scoreFromState(ps),
-				PolicyIDs: append([]string{}, ps.PolicyIDs...),
-				Rationale: "rule_match_route",
-				LatencyMs: time.Since(t0).Milliseconds(),
-				EarlyExit: ps.Decision == tools.DecisionApprove || ps.Decision == tools.DecisionReject,
-				Gate:      ps.Gate,
-				State:     ps,
-			}
+			early := ps.Decision == tools.DecisionApprove || ps.Decision == tools.DecisionReject
+			return engineFromPipeline(ps, early, "rule_match_route", t0)
 		}
 	}
 	return EngineResult{
@@ -105,8 +111,10 @@ func RunRuleEngine(ctx context.Context, txn tools.CrossBorderTransaction, pack *
 		PolicyIDs: append([]string{}, ps.PolicyIDs...),
 		Rationale: "rule_needs_deeper",
 		LatencyMs: time.Since(t0).Milliseconds(),
-		Gate:      ps.Gate,
-		State:     ps,
+		TraceID:   ps.TraceID,
+		ListVersion: ps.ListVersion,
+		Audit:     ps.Audit,
+		SkipAI:    false,
 	}
 }
 
@@ -147,10 +155,10 @@ func RunLightEngine(fv tools.FeatureVector, pack *PolicyPack, graphScore float64
 	}
 }
 
-// RunGraphEngine 关联图。
-func RunGraphEngine(txn tools.CrossBorderTransaction, party *tools.NormalizedParty, g *EntityGraph, orch config.OrchestratorConfig) EngineResult {
+// RunGraphEngineCB 跨境关联图。
+func RunGraphEngineCB(txn tools.CrossBorderTransaction, party *tools.NormalizedParty, g *EntityGraph, pack *PolicyPack) EngineResult {
 	t0 := time.Now()
-	score, dec, detail, pols := g.Observe(txn, party, orch)
+	score, dec, detail, pols := g.ObserveCB(txn, party, pack.Orchestrator)
 	return EngineResult{
 		Engine:    tools.EngineGraph,
 		Decision:  dec,
@@ -161,7 +169,7 @@ func RunGraphEngine(txn tools.CrossBorderTransaction, party *tools.NormalizedPar
 	}
 }
 
-// Arbitrate 仲裁：一票 REJECT；否则取最高分映射；记录冲突。
+// Arbitrate 仲裁：一票 REJECT。
 func Arbitrate(results []EngineResult) (decision string, score float64, policies []string, conflict bool, rationale string) {
 	if len(results) == 0 {
 		return tools.DecisionReview, 0.5, nil, false, "no_engine_results"
@@ -192,10 +200,8 @@ func Arbitrate(results []EngineResult) (decision string, score float64, policies
 		}
 	}
 	conflict = (rejectN > 0 && (reviewN > 0 || approveN > 0)) || (reviewN > 0 && approveN > 0 && rejectN == 0)
-	if decision == tools.DecisionReject {
-		if score < 0.65 {
-			score = 0.85
-		}
+	if decision == tools.DecisionReject && score < 0.65 {
+		score = 0.85
 	}
 	rationale = fmt.Sprintf("arbiter reject=%d review=%d approve=%d | %v", rejectN, reviewN, approveN, reasons)
 	return decision, score, policies, conflict, rationale

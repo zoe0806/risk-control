@@ -39,7 +39,7 @@ func BuildStockRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable
 	thr := primaryStockRiskThreshold(deps.Cfg)
 
 	//构建本地子图
-	localSG, err := BuildStockLocalGateGraph(ctx)
+	localSG, err := BuildStockLocalGateGraph(ctx, deps)
 	if err != nil {
 		return nil, err
 	}
@@ -270,6 +270,7 @@ func finalizeStockScreeningResult(st *tools.StockPipelineState) tools.ScreeningR
 		res.Blocked = true
 		res.BlockReason = st.Gate.BlockReason
 		res.Level = "BLOCKED"
+		res.Decision = tools.DecisionReject
 		res.FinalRiskScore = 1.0
 		if st.Gate.LocalRiskScore > 0 {
 			res.FinalRiskScore = st.Gate.LocalRiskScore
@@ -290,11 +291,7 @@ func finalizeStockScreeningResult(st *tools.StockPipelineState) tools.ScreeningR
 		}
 	}
 	res.FinalRiskScore = score
-	res.Level = "LOW"
-	if score >= 0.65 {
-		res.Level = "HIGH"
-	} else if score >= 0.35 {
-		res.Level = "MEDIUM"
-	}
+	res.Decision = tools.DecisionFromScore(score)
+	res.Level = tools.LevelFromScore(score)
 	return res
 }
