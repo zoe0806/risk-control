@@ -1,0 +1,37 @@
+{
+  "version": "pack_v3_shadow",
+  "crossBorder": {
+    "whitelistKeys": ["ACME_CORP"],
+    "blacklistKeys": ["KNOWN_BAD_ACTOR", "SHADOW_ONLY_BAD"],
+    "blockedCountries": ["KP", "IR", "SY", "CU"],
+    "highRiskCountries": ["RU", "BY", "VE"],
+    "maxAmountMinorUnit": 300000000,
+    "velocityWindowSec": 60,
+    "velocityMaxCount": 15,
+    "fuzzyMatchMinScore": 0.5,
+    "skipAIBelowScore": 0.4,
+    "autoRejectAboveScore": 0.9,
+    "cacheTTLSec": 300,
+    "candidateLimit": 16
+  },
+  "lightWeights": {
+    "bias": -1.0,
+    "amount": 1.6,
+    "countryHighRisk": 1.0,
+    "countryBlocked": 3.0,
+    "nameTokens": 0.06,
+    "purposeLen": 0.003,
+    "graphCluster": 1.0
+  },
+  "orchestrator": {
+    "deepTimeoutMs": 8000,
+    "circuitFailureThreshold": 3,
+    "circuitOpenSec": 20,
+    "shadowEnabled": false,
+    "asyncCaseDraft": false,
+    "lightReviewThreshold": 0.35,
+    "lightRejectThreshold": 0.72,
+    "graphSharedDeviceReview": 2,
+    "graphClusterReject": 8
+  }
+}

@@ -11,6 +11,10 @@ type CrossBorderTransaction struct {
 	PaymentPurpose  string `json:"payment_purpose,omitempty"`
 	AmountMinorUnit int64  `json:"amount_minor_unit,omitempty"`
 	Currency        string `json:"currency,omitempty"`
+	// 行为特征（阶段1 频次/速度闸门）
+	AccountID string `json:"account_id,omitempty"`
+	DeviceID  string `json:"device_id,omitempty"`
+	ClientIP  string `json:"client_ip,omitempty"`
 }
 
 // NormalizedParty 清洗与标准化后的对手方信息。
@@ -23,11 +27,34 @@ type NormalizedParty struct {
 
 // SanctionCandidate 本地名单缓存命中（粗筛候选，供 AI 精排）。
 type SanctionCandidate struct {
-	ID               int64  `json:"id"`
-	ListCode         string `json:"list_code"`
-	NameOriginal     string `json:"name_original"`
-	NameNormalized   string `json:"name_normalized"`
-	MatchExplanation string `json:"match_explanation,omitempty"`
+	ID               int64    `json:"id"`
+	ListCode         string   `json:"list_code"`
+	ListVersion      string   `json:"list_version,omitempty"`
+	NameOriginal     string   `json:"name_original"`
+	NameNormalized   string   `json:"name_normalized"`
+	Aliases          []string `json:"aliases,omitempty"`
+	MatchScore       float64  `json:"match_score,omitempty"`
+	MatchExplanation string   `json:"match_explanation,omitempty"`
+}
+
+// CBGateHit 本地闸门命中项。
+type CBGateHit struct {
+	PolicyID string `json:"policy_id"`
+	Detail   string `json:"detail"`
+}
+
+// CBLocalGate 跨境本地确定性闸门结果（阶段1）。
+type CBLocalGate struct {
+	HardBlock     bool        `json:"hard_block"`
+	WhitelistPass bool        `json:"whitelist_pass"`
+	EarlyExit     bool        `json:"early_exit"` // 白/黑/硬规则：无需名单/AI
+	ForceAI       bool        `json:"force_ai"`
+	SkipAI        bool        `json:"skip_ai"` // 名单低分/无候选：跳过 LLM
+	AutoReject    bool        `json:"auto_reject"`
+	BlockReason   string      `json:"block_reason,omitempty"`
+	Hits          []CBGateHit `json:"hits,omitempty"`
+	LocalRiskScore float64    `json:"local_risk_score"`
+	BestMatchScore float64    `json:"best_match_score,omitempty"`
 }
 
 // PrimaryAssessment AI 初筛结构化结果。
@@ -100,11 +127,21 @@ type PipelineState struct {
 	Transaction CrossBorderTransaction `json:"transaction"`
 	Party       *NormalizedParty       `json:"party,omitempty"`
 	Candidates  []SanctionCandidate    `json:"candidates,omitempty"`
+	Gate        *CBLocalGate           `json:"gate,omitempty"`
 
 	Primary   *PrimaryAssessment   `json:"primary,omitempty"`
 	Secondary *SecondaryAssessment `json:"secondary,omitempty"`
 
 	ReportMarkdown string `json:"report_markdown,omitempty"`
+
+	// 稳定决策契约（阶段1/2）
+	Decision    string   `json:"decision,omitempty"` // APPROVE|REVIEW|REJECT
+	PolicyIDs   []string `json:"policy_ids,omitempty"`
+	ListVersion string   `json:"list_version,omitempty"`
+	CaseID      string   `json:"case_id,omitempty"`
+	SkippedAI   bool     `json:"skipped_ai,omitempty"`
+	FromCache   bool     `json:"from_cache,omitempty"`
+	FinalScoreHint float64 `json:"-"` // 缓存命中时带入分数
 
 	StepTimings map[string]time.Duration `json:"step_timings,omitempty"`
 

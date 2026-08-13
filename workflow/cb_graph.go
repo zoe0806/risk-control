@@ -17,14 +17,19 @@ import (
 const (
 	cbGraphName = "cb_risk_v1"
 
-	nodeIngest          = "ingest"           //提取 清洗
-	nodeNormalize       = "normalize"        //归一化
-	nodeLocalCandidates = "local_candidates" //本地候选
-	nodeAIPrimary       = "ai_primary"       //AI初筛
-	nodeAISecondary     = "ai_secondary"     //AI二次
-	nodeSkipSecondary   = "skip_secondary"   //跳过二次
-	nodeAIReport        = "ai_report"        //AI报告
-	nodePersist         = "persist"          //持久化
+	nodeIngest          = "ingest"
+	nodeNormalize       = "normalize"
+	nodeFastFilter      = "fast_filter"
+	nodeEarlyDecide     = "early_decide"
+	nodeCacheLookup     = "cache_lookup"
+	nodeLocalCandidates = "local_candidates"
+	nodeMatchRoute      = "match_route"
+	nodeRuleDecide      = "rule_decide"
+	nodeAIPrimary       = "ai_primary"
+	nodeAISecondary     = "ai_secondary"
+	nodeSkipSecondary   = "skip_secondary"
+	nodeAIReport        = "ai_report"
+	nodePersist         = "persist"
 )
 
 func primaryRiskThreshold(cfg config.Config) float64 {
@@ -34,21 +39,39 @@ func primaryRiskThreshold(cfg config.Config) float64 {
 	return 0.55
 }
 
-// BuildCrossBorderRiskGraph 制裁筛查多步编排
+func cacheKeyForParty(party *tools.NormalizedParty, listVer string) string {
+	if party == nil {
+		return ""
+	}
+	return fmt.Sprintf("cb:%s:%s:%s", listVer, party.NormalizedKey, party.CountryNormalized)
+}
+
+// BuildCrossBorderRiskGraph 制裁筛查：本地漏斗 → 可选 AI → 持久化/案例。
 func BuildCrossBorderRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Runnable[tools.CrossBorderTransaction, tools.ScreeningResult], error) {
 	if deps == nil || deps.Router == nil || deps.Store == nil {
 		return nil, fmt.Errorf("workflow deps incomplete")
 	}
+	if deps.Velocity == nil {
+		deps.Velocity = NewVelocityTracker()
+	}
 	retryCfg := llm.DefaultRetryConfig()
 	thr := primaryRiskThreshold(deps.Cfg)
+	liveRules := func() config.CrossBorderRules {
+		if deps.Policies != nil {
+			if p := deps.Policies.Primary(); p != nil {
+				return p.CrossBorder
+			}
+		}
+		return deps.Cfg.CBRules()
+	}
 
 	g := compose.NewGraph[tools.CrossBorderTransaction, tools.ScreeningResult]()
 
-	//AddLambdaNode 注册一个节点，InvokableLambda包装一个函数，函数签名：func(ctx context.Context, in tools.CrossBorderTransaction) (*tools.PipelineState, error)
 	if err := g.AddLambdaNode(nodeIngest, compose.InvokableLambda(func(ctx context.Context, in tools.CrossBorderTransaction) (*tools.PipelineState, error) {
 		return &tools.PipelineState{
 			TraceID:     tools.GetUUID(),
 			Transaction: in,
+			Gate:        &tools.CBLocalGate{},
 			StepTimings: map[string]time.Duration{},
 			Audit:       &tools.AuditBuffer{},
 		}, nil
@@ -56,54 +79,139 @@ func BuildCrossBorderRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Ru
 		return nil, err
 	}
 
-	// 注册第二个节点，PipelineState 作为输入，PipelineState 作为输出
 	if err := g.AddLambdaNode(nodeNormalize, compose.InvokableLambda(func(ctx context.Context, st *tools.PipelineState) (*tools.PipelineState, error) {
 		t0 := time.Now()
-		//归一化交易对手方名称
 		st.Party = tools.NormalizePartyName(st.Transaction.Counterparty, st.Transaction.Country)
+		if ver, err := deps.Store.ActiveListVersion(ctx); err == nil {
+			st.ListVersion = ver
+		}
 		recordStep(st, nodeNormalize, t0)
 		return st, nil
 	}), compose.WithNodeName(nodeNormalize)); err != nil {
 		return nil, err
 	}
 
+	if err := g.AddLambdaNode(nodeFastFilter, compose.InvokableLambda(func(ctx context.Context, st *tools.PipelineState) (*tools.PipelineState, error) {
+		t0 := time.Now()
+		ApplyFastFilter(st, liveRules(), deps.Velocity)
+		recordStep(st, nodeFastFilter, t0)
+		st.Audit.AddStep(nodeFastFilter, store.LogJSON(st.Gate), time.Since(t0).Milliseconds())
+		return st, nil
+	}), compose.WithNodeName(nodeFastFilter)); err != nil {
+		return nil, err
+	}
+
+	if err := g.AddLambdaNode(nodeEarlyDecide, compose.InvokableLambda(func(ctx context.Context, st *tools.PipelineState) (*tools.PipelineState, error) {
+		t0 := time.Now()
+		ApplyRuleDecision(st)
+		recordStep(st, nodeEarlyDecide, t0)
+		st.Audit.AddStep(nodeEarlyDecide, store.LogJSON(map[string]any{
+			"decision": st.Decision,
+			"policies": st.PolicyIDs,
+		}), time.Since(t0).Milliseconds())
+		return st, nil
+	}), compose.WithNodeName(nodeEarlyDecide)); err != nil {
+		return nil, err
+	}
+
+	if err := g.AddLambdaNode(nodeCacheLookup, compose.InvokableLambda(func(ctx context.Context, st *tools.PipelineState) (*tools.PipelineState, error) {
+		t0 := time.Now()
+		key := cacheKeyForParty(st.Party, st.ListVersion)
+		cached, err := deps.Store.GetScreeningCache(ctx, key)
+		if err != nil {
+			st.Audit.AddStep(nodeCacheLookup, store.LogJSON(map[string]any{"error": err.Error()}), time.Since(t0).Milliseconds())
+			recordStep(st, nodeCacheLookup, t0)
+			return st, nil
+		}
+		if cached != nil {
+			st.FromCache = true
+			st.SkippedAI = true
+			st.Decision = cached.Decision
+			st.PolicyIDs = append([]string{tools.PolicyCacheHit}, cached.PolicyIDs...)
+			st.FinalScoreHint = cached.FinalRiskScore
+			st.Primary = cached.Primary
+			st.Secondary = cached.Secondary
+			st.ReportMarkdown = cached.ReportMarkdown
+			if st.ReportMarkdown == "" {
+				st.ReportMarkdown = "## 缓存命中\n- 复用近期同对手方筛查结果\n"
+			}
+			appendPolicy(st, tools.PolicyCacheHit)
+			st.Audit.AddStep(nodeCacheLookup, store.LogJSON(map[string]any{"hit": true, "key": key}), time.Since(t0).Milliseconds())
+		} else {
+			st.Audit.AddStep(nodeCacheLookup, store.LogJSON(map[string]any{"hit": false, "key": key}), time.Since(t0).Milliseconds())
+		}
+		recordStep(st, nodeCacheLookup, t0)
+		return st, nil
+	}), compose.WithNodeName(nodeCacheLookup)); err != nil {
+		return nil, err
+	}
+
 	if err := g.AddLambdaNode(nodeLocalCandidates, compose.InvokableLambda(func(ctx context.Context, st *tools.PipelineState) (*tools.PipelineState, error) {
 		t0 := time.Now()
-		//搜索制裁名单
-		hits, err := deps.Store.SearchSanctions(ctx, st.Party, 48)
+		rules := liveRules()
+		hits, err := deps.Store.SearchSanctions(ctx, st.Party, rules.CandidateLimit*3)
 		if err != nil {
 			return nil, err
 		}
-		st.Candidates = hits
+		st.Candidates = tools.RankCandidates(st.Party, hits, rules.FuzzyMatchMinScore, rules.CandidateLimit)
+		if len(st.Candidates) > 0 && st.Candidates[0].ListVersion != "" {
+			st.ListVersion = st.Candidates[0].ListVersion
+		}
 		recordStep(st, nodeLocalCandidates, t0)
-		//审计日志
 		st.Audit.AddStep(nodeLocalCandidates, store.LogJSON(map[string]any{
-			"candidate_count": len(hits),
+			"candidate_count": len(st.Candidates),
 			"normalized_key":  st.Party.NormalizedKey,
+			"list_version":    st.ListVersion,
+			"top_score": func() float64 {
+				if len(st.Candidates) == 0 {
+					return 0
+				}
+				return st.Candidates[0].MatchScore
+			}(),
 		}), time.Since(t0).Milliseconds())
 		return st, nil
 	}), compose.WithNodeName(nodeLocalCandidates)); err != nil {
 		return nil, err
 	}
 
+	if err := g.AddLambdaNode(nodeMatchRoute, compose.InvokableLambda(func(ctx context.Context, st *tools.PipelineState) (*tools.PipelineState, error) {
+		t0 := time.Now()
+		ApplyMatchRouting(st, liveRules())
+		recordStep(st, nodeMatchRoute, t0)
+		st.Audit.AddStep(nodeMatchRoute, store.LogJSON(st.Gate), time.Since(t0).Milliseconds())
+		return st, nil
+	}), compose.WithNodeName(nodeMatchRoute)); err != nil {
+		return nil, err
+	}
+
+	if err := g.AddLambdaNode(nodeRuleDecide, compose.InvokableLambda(func(ctx context.Context, st *tools.PipelineState) (*tools.PipelineState, error) {
+		t0 := time.Now()
+		ApplyRuleDecision(st)
+		recordStep(st, nodeRuleDecide, t0)
+		st.Audit.AddStep(nodeRuleDecide, store.LogJSON(map[string]any{
+			"decision": st.Decision,
+			"policies": st.PolicyIDs,
+		}), time.Since(t0).Milliseconds())
+		return st, nil
+	}), compose.WithNodeName(nodeRuleDecide)); err != nil {
+		return nil, err
+	}
+
 	if err := g.AddLambdaNode(nodeAIPrimary, compose.InvokableLambda(func(ctx context.Context, st *tools.PipelineState) (*tools.PipelineState, error) {
 		t0 := time.Now()
-		//拼接初筛消息
 		msgs := llm.PrimaryMessages(st, deps.Cfg)
-		//调用初筛模型
 		out, err := llm.GenerateWithRetry(ctx, deps.Router.For(tools.TaskSanctionsPrimary), msgs, retryCfg)
 		if err != nil {
 			return nil, err
 		}
 		raw := out.Content
-		var pr tools.PrimaryAssessment //解析初筛结果
+		var pr tools.PrimaryAssessment
 		if err := json.Unmarshal([]byte(llm.ExtractJSONObject(raw)), &pr); err != nil {
 			return nil, fmt.Errorf("primary json: %w", err)
 		}
 		pr.RawModelOutput = raw
 		st.Primary = &pr
 		recordStep(st, nodeAIPrimary, t0)
-		//审计日志
 		st.Audit.AddDecision(string(tools.TaskSanctionsPrimary), deps.Router.ModelName(tools.TaskSanctionsPrimary),
 			tools.TruncSummary(msgs), raw, time.Since(t0).Milliseconds())
 		return st, nil
@@ -114,7 +222,6 @@ func BuildCrossBorderRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Ru
 	if err := g.AddLambdaNode(nodeAISecondary, compose.InvokableLambda(func(ctx context.Context, st *tools.PipelineState) (*tools.PipelineState, error) {
 		t0 := time.Now()
 		msgs := llm.VerifyMessages(st, deps.Cfg)
-		//调用二次验证模型
 		out, err := llm.GenerateWithRetry(ctx, deps.Router.For(tools.TaskSanctionsVerify), msgs, retryCfg)
 		if err != nil {
 			st.Secondary = degradedSecondary(st, err)
@@ -156,7 +263,6 @@ func BuildCrossBorderRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Ru
 			TechnicalDegraded: false,
 		}
 		recordStep(st, nodeSkipSecondary, t0)
-		//审计日志
 		st.Audit.AddStep(nodeSkipSecondary, store.LogJSON(map[string]any{
 			"reason": "未达到二次模型触发阈值，跳过二验。",
 		}), time.Since(t0).Milliseconds())
@@ -173,8 +279,8 @@ func BuildCrossBorderRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Ru
 			return nil, err
 		}
 		st.ReportMarkdown = out.Content
+		ApplyAIDecisionCodes(st)
 		recordStep(st, nodeAIReport, t0)
-		//审计日志
 		st.Audit.AddDecision(string(tools.TaskReport), deps.Router.ModelName(tools.TaskReport),
 			tools.TruncSummary(msgs), out.Content, time.Since(t0).Milliseconds())
 		return st, nil
@@ -184,13 +290,53 @@ func BuildCrossBorderRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Ru
 
 	if err := g.AddLambdaNode(nodePersist, compose.InvokableLambda(func(ctx context.Context, st *tools.PipelineState) (tools.ScreeningResult, error) {
 		t0 := time.Now()
-		payload := store.LogJSON(st)
-		st.Audit.AddStep(nodePersist, payload, time.Since(t0).Milliseconds())
-
+		if st.Decision == "" && !st.FromCache {
+			ApplyAIDecisionCodes(st)
+		}
 		res := finalizeResult(st)
 
+		// REVIEW → 开案例
+		if res.Decision == tools.DecisionReview && res.CaseID == "" && !st.FromCache {
+			caseID := "CASE-" + tools.GetUUID()
+			payload := store.LogJSON(map[string]any{
+				"transaction": st.Transaction,
+				"party":       st.Party,
+				"candidates":  st.Candidates,
+				"gate":        st.Gate,
+				"primary":     st.Primary,
+				"secondary":   st.Secondary,
+			})
+			rc := &tools.ReviewCase{
+				CaseID:        caseID,
+				TraceID:       st.TraceID,
+				TransactionID: st.Transaction.TransactionID,
+				Status:        "OPEN",
+				DecisionCode:  tools.DecisionReview,
+				PolicyIDs:     st.PolicyIDs,
+				ListVersion:   st.ListVersion,
+				PayloadJSON:   payload,
+			}
+			if err := deps.Store.CreateReviewCase(ctx, rc); err != nil {
+				return tools.ScreeningResult{}, fmt.Errorf("create review case: %w", err)
+			}
+			st.CaseID = caseID
+			res.CaseID = caseID
+		}
+
+		st.Audit.AddStep(nodePersist, store.LogJSON(st), time.Since(t0).Milliseconds())
 		if err := deps.Store.FlushAudit(ctx, st.TraceID, st.Audit); err != nil {
 			return tools.ScreeningResult{}, err
+		}
+
+		// 可缓存的确定性/终态结果（不含 OPEN 案例过程中的灰区也可缓存 APPROVE/REJECT）
+		if !st.FromCache && (res.Decision == tools.DecisionApprove || res.Decision == tools.DecisionReject) {
+			key := cacheKeyForParty(st.Party, st.ListVersion)
+			cacheRes := res
+			cacheRes.TraceID = ""
+			cacheRes.CaseID = ""
+			cacheRes.TotalDurationMs = 0
+			cacheRes.PersistedAuditRows = 0
+			_ = deps.Store.PutScreeningCache(ctx, key, &cacheRes, time.Duration(liveRules().CacheTTLSec)*time.Second)
 		}
 
 		res.PersistedAuditRows = len(st.Audit.Steps) + len(st.Audit.Decisions)
@@ -199,7 +345,27 @@ func BuildCrossBorderRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Ru
 		return nil, err
 	}
 
-	//创建分支，根据初筛结果决定是否进行二次验证
+	earlyBranch := compose.NewGraphBranch(func(ctx context.Context, st *tools.PipelineState) (string, error) {
+		if st.Gate != nil && st.Gate.EarlyExit {
+			return nodeEarlyDecide, nil
+		}
+		return nodeCacheLookup, nil
+	}, map[string]bool{nodeEarlyDecide: true, nodeCacheLookup: true})
+
+	cacheBranch := compose.NewGraphBranch(func(ctx context.Context, st *tools.PipelineState) (string, error) {
+		if st.FromCache {
+			return nodePersist, nil
+		}
+		return nodeLocalCandidates, nil
+	}, map[string]bool{nodePersist: true, nodeLocalCandidates: true})
+
+	matchBranch := compose.NewGraphBranch(func(ctx context.Context, st *tools.PipelineState) (string, error) {
+		if st.Gate != nil && st.Gate.SkipAI {
+			return nodeRuleDecide, nil
+		}
+		return nodeAIPrimary, nil
+	}, map[string]bool{nodeRuleDecide: true, nodeAIPrimary: true})
+
 	primaryBranch := compose.NewGraphBranch(func(ctx context.Context, st *tools.PipelineState) (string, error) {
 		if st.Primary != nil && st.Primary.NeedsSecondaryReview && st.Primary.RiskScore >= thr {
 			return nodeAISecondary, nil
@@ -207,15 +373,18 @@ func BuildCrossBorderRiskGraph(ctx context.Context, deps *GraphDeps) (compose.Ru
 		return nodeSkipSecondary, nil
 	}, map[string]bool{nodeAISecondary: true, nodeSkipSecondary: true})
 
-	//注册边和分支
-	//图顺序：清洗 → 归一化 → 本地候选 → AI初筛 → 分支(二次验证/跳过二次) → AI报告 → 审计 → 持久化
 	for _, step := range []struct {
 		fn func() error
 	}{
 		{func() error { return g.AddEdge(compose.START, nodeIngest) }},
 		{func() error { return g.AddEdge(nodeIngest, nodeNormalize) }},
-		{func() error { return g.AddEdge(nodeNormalize, nodeLocalCandidates) }},
-		{func() error { return g.AddEdge(nodeLocalCandidates, nodeAIPrimary) }},
+		{func() error { return g.AddEdge(nodeNormalize, nodeFastFilter) }},
+		{func() error { return g.AddBranch(nodeFastFilter, earlyBranch) }},
+		{func() error { return g.AddEdge(nodeEarlyDecide, nodePersist) }},
+		{func() error { return g.AddBranch(nodeCacheLookup, cacheBranch) }},
+		{func() error { return g.AddEdge(nodeLocalCandidates, nodeMatchRoute) }},
+		{func() error { return g.AddBranch(nodeMatchRoute, matchBranch) }},
+		{func() error { return g.AddEdge(nodeRuleDecide, nodePersist) }},
 		{func() error { return g.AddBranch(nodeAIPrimary, primaryBranch) }},
 		{func() error { return g.AddEdge(nodeAISecondary, nodeAIReport) }},
 		{func() error { return g.AddEdge(nodeSkipSecondary, nodeAIReport) }},
@@ -245,7 +414,6 @@ func degradedSecondary(st *tools.PipelineState, cause error) *tools.SecondaryAss
 	}
 }
 
-// 记录每个步骤的耗时
 func recordStep(st *tools.PipelineState, name string, t0 time.Time) {
 	if st.StepTimings == nil {
 		st.StepTimings = map[string]time.Duration{}
@@ -255,7 +423,9 @@ func recordStep(st *tools.PipelineState, name string, t0 time.Time) {
 
 func finalizeResult(st *tools.PipelineState) tools.ScreeningResult {
 	score := 0.0
-	if st.Primary != nil {
+	if st.FinalScoreHint > 0 && st.FromCache {
+		score = st.FinalScoreHint
+	} else if st.Primary != nil {
 		score = st.Primary.RiskScore
 	}
 	if st.Secondary != nil {
@@ -265,18 +435,27 @@ func finalizeResult(st *tools.PipelineState) tools.ScreeningResult {
 			}
 		} else if !st.Secondary.Skipped {
 			score = st.Secondary.FinalRiskScore
+		} else if st.Secondary.FinalRiskScore > 0 {
+			score = st.Secondary.FinalRiskScore
 		}
 	}
-	level := "LOW"
-	if score >= 0.65 {
+	decision := st.Decision
+	if decision == "" {
+		decision = tools.DecisionFromScore(score)
+	}
+	level := tools.LevelFromScore(score)
+	if decision == tools.DecisionReject {
 		level = "HIGH"
-	} else if score >= 0.35 {
-		level = "MEDIUM"
 	}
 	return tools.ScreeningResult{
 		BusinessType:   tools.BusinessCrossBorder,
 		TraceID:        st.TraceID,
 		TransactionID:  st.Transaction.TransactionID,
+		Decision:       decision,
+		PolicyIDs:      st.PolicyIDs,
+		ListVersion:    st.ListVersion,
+		CaseID:         st.CaseID,
+		SkippedAI:      st.SkippedAI || st.FromCache,
 		FinalRiskScore: score,
 		Level:          level,
 		Primary:        st.Primary,
