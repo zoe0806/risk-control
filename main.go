@@ -17,8 +17,16 @@ import (
 
 func main() {
 	cfg := config.Load()
-	if cfg.DeepSeekAPIKey == "" || cfg.MySQLDSN == "" || cfg.HTTPAddr == "" || cfg.ModelPrimary == "" {
-		panic(fmt.Errorf("please check your config"))
+	if cfg.MySQLDSN == "" || cfg.HTTPAddr == "" {
+		panic(fmt.Errorf("please check mysqlDSN / httpAddr in config"))
+	}
+	kind := workflow.NormalizeDeepKind(cfg.DeepRuntime.Kind)
+	needLLM := kind == workflow.DeepRuntimeNative || kind == workflow.DeepRuntimeEino
+	if needLLM && (cfg.DeepSeekAPIKey == "" || cfg.ModelPrimary == "") {
+		panic(fmt.Errorf("deep runtime %q requires deepSeekAPIKey and modelPrimary", kind))
+	}
+	if kind == workflow.DeepRuntimeCLI && cfg.DeepRuntime.CLI.Command == "" {
+		panic(fmt.Errorf("deepRuntime.kind=cli requires deepRuntime.cli.command"))
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -34,9 +42,12 @@ func main() {
 		panic(fmt.Errorf("ensure schema: %v", err))
 	}
 
-	router, err := llm.NewRouter(ctx, *cfg)
-	if err != nil {
-		panic(fmt.Errorf("llm router: %v", err))
+	var router *llm.Router
+	if needLLM {
+		router, err = llm.NewRouter(ctx, *cfg)
+		if err != nil {
+			panic(fmt.Errorf("llm router: %v", err))
+		}
 	}
 
 	deps := &workflow.GraphDeps{Store: st, Router: router, Cfg: *cfg}

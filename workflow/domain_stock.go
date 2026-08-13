@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cloudwego/eino/compose"
-
 	"risk_control/tools"
 )
 
@@ -64,6 +62,7 @@ func (stockProfile) RunRules(ctx context.Context, e *RiskEngine, pack *PolicyPac
 		Blocked:        st.Gate.HardBlock,
 		BlockReason:    st.Gate.BlockReason,
 		SkipAI:         early && dec == tools.DecisionApprove,
+		Stock:          st,
 	}
 }
 
@@ -105,19 +104,6 @@ func (stockProfile) NeedDeep(pre PreAnalysis, rule EngineResult, arbDecision str
 	return pre.Bucket == tools.BucketDeep || arbDecision == tools.DecisionReview || rule.Decision == tools.DecisionReview
 }
 
-func (stockProfile) InvokeDeep(ctx context.Context, e *RiskEngine, req any, opts []compose.Option) (tools.ScreeningResult, error) {
-	order, err := asStock(req)
-	if err != nil {
-		return tools.ScreeningResult{}, err
-	}
-	res, err := e.stockGraph.Invoke(ctx, order, opts...)
-	if err != nil {
-		return res, err
-	}
-	ensureStockDecision(&res)
-	return res, nil
-}
-
 func (stockProfile) ShadowLocal(ctx context.Context, e *RiskEngine, shadow *PolicyPack, req any) (string, string) {
 	order, _ := asStock(req)
 	pre, _ := (stockProfile{}).PreAnalyze(shadow, order)
@@ -146,15 +132,4 @@ func asStock(req any) (tools.StockOrder, error) {
 	default:
 		return tools.StockOrder{}, fmt.Errorf("invalid stock payload %T", req)
 	}
-}
-
-func ensureStockDecision(res *tools.ScreeningResult) {
-	if res == nil || res.Decision != "" {
-		return
-	}
-	if res.Blocked {
-		res.Decision = tools.DecisionReject
-		return
-	}
-	res.Decision = tools.DecisionFromScore(res.FinalRiskScore)
 }

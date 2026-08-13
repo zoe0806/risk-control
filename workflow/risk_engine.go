@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cloudwego/eino/compose"
-
 	"risk_control/config"
 	"risk_control/llm"
 	"risk_control/store"
@@ -23,23 +21,22 @@ type GraphDeps struct {
 	Graph    *EntityGraph
 }
 
-// RiskEngine 多业务风控：通用编排器 + 域 Profile + 深度图。
+// RiskEngine 多业务风控：通用编排器 + 域 Profile + 可插拔深度 runtime。
 type RiskEngine struct {
-	stockGraph compose.Runnable[tools.StockOrder, tools.ScreeningResult]
-	cbGraph    compose.Runnable[tools.CrossBorderTransaction, tools.ScreeningResult]
-	store      store.Store
-	router     *llm.Router
-	cfg        config.Config
-	velocity   *VelocityTracker
-	policies   *PolicyHub
-	policyReg  *PolicyRegistry
-	profiles   map[string]DomainProfile
-	graph      *EntityGraph
-	breaker    *CircuitBreaker
-	metrics    *EngineMetrics
+	store     store.Store
+	router    *llm.Router
+	cfg       config.Config
+	velocity  *VelocityTracker
+	policies  *PolicyHub
+	policyReg *PolicyRegistry
+	profiles  map[string]DomainProfile
+	graph     *EntityGraph
+	breaker   *CircuitBreaker
+	metrics   *EngineMetrics
+	deep      DeepRuntime
 }
 
-// NewRiskEngine 编译各域深度图并注册 DomainProfile。
+// NewRiskEngine 注册 DomainProfile 并按配置装配深度 runtime（默认 native，不再编译本地闸门图）。
 func NewRiskEngine(ctx context.Context, deps *GraphDeps) (*RiskEngine, error) {
 	if deps == nil {
 		return nil, fmt.Errorf("graph deps is nil")
@@ -53,26 +50,29 @@ func NewRiskEngine(ctx context.Context, deps *GraphDeps) (*RiskEngine, error) {
 	if deps.Graph == nil {
 		deps.Graph = NewEntityGraph()
 	}
+	if deps.Store == nil {
+		deps.Store = store.Noop{}
+	}
 	reg := deps.Policies.Registry()
 	orch := reg.Primary(tools.BusinessCrossBorder).Orchestrator
 
-	stockGraph, err := BuildStockRiskGraph(ctx, deps)
-	if err != nil {
-		return nil, fmt.Errorf("stock risk graph: %w", err)
+	kind := NormalizeDeepKind(deps.Cfg.DeepRuntime.Kind)
+	if deepRuntimeNeedsLLM(kind) && deps.Router == nil {
+		return nil, fmt.Errorf("llm router required for deep runtime %q", kind)
 	}
-	cbGraph, err := BuildCrossBorderRiskGraph(ctx, deps)
+
+	deep, err := NewDeepRuntime(ctx, deps)
 	if err != nil {
-		return nil, fmt.Errorf("cross border risk graph: %w", err)
+		return nil, fmt.Errorf("deep runtime: %w", err)
 	}
+
 	eng := &RiskEngine{
-		stockGraph: stockGraph,
-		cbGraph:    cbGraph,
-		store:      deps.Store,
-		router:     deps.Router,
-		cfg:        deps.Cfg,
-		velocity:   deps.Velocity,
-		policies:   deps.Policies,
-		policyReg:  reg,
+		store:     deps.Store,
+		router:    deps.Router,
+		cfg:       deps.Cfg,
+		velocity:  deps.Velocity,
+		policies:  deps.Policies,
+		policyReg: reg,
 		profiles: map[string]DomainProfile{
 			tools.BusinessCrossBorder: crossBorderProfile{},
 			tools.BusinessStock:       stockProfile{},
@@ -80,6 +80,7 @@ func NewRiskEngine(ctx context.Context, deps *GraphDeps) (*RiskEngine, error) {
 		graph:   deps.Graph,
 		breaker: NewCircuitBreaker(orch.CircuitFailureThreshold, time.Duration(orch.CircuitOpenSec)*time.Second),
 		metrics: &EngineMetrics{},
+		deep:    deep,
 	}
 	return eng, nil
 }
@@ -105,13 +106,21 @@ func (e *RiskEngine) PolicyRegistry() *PolicyRegistry {
 	return e.policyReg
 }
 
+func (e *RiskEngine) DeepRuntimeName() string {
+	if e == nil || e.deep == nil {
+		return DeepRuntimeOff
+	}
+	return e.deep.Name()
+}
+
 func (e *RiskEngine) Metrics() map[string]any {
 	if e == nil {
 		return nil
 	}
 	out := map[string]any{
-		"engines": e.metrics.Snapshot(),
-		"circuit": e.breaker.Stats(),
+		"engines":      e.metrics.Snapshot(),
+		"circuit":      e.breaker.Stats(),
+		"deep_runtime": e.DeepRuntimeName(),
 	}
 	if e.policyReg != nil {
 		out["policies"] = e.policyReg.Snapshot()
@@ -120,7 +129,16 @@ func (e *RiskEngine) Metrics() map[string]any {
 }
 
 // EvaluateScreeningRequest 统一入口：按 business_type 选择 DomainProfile 走通用编排。
-func (e *RiskEngine) EvaluateScreeningRequest(ctx context.Context, req tools.ScreeningRequest, opts ...compose.Option) (tools.ScreeningResult, error) {
+func (e *RiskEngine) EvaluateScreeningRequest(ctx context.Context, req tools.ScreeningRequest) (tools.ScreeningResult, error) {
+	return e.evaluate(ctx, req, false)
+}
+
+// EvaluateLocal 仅本地引擎（规则/图/轻量/仲裁），供 riskctl eval 与策略 golden。
+func (e *RiskEngine) EvaluateLocal(ctx context.Context, req tools.ScreeningRequest) (tools.ScreeningResult, error) {
+	return e.evaluate(ctx, req, true)
+}
+
+func (e *RiskEngine) evaluate(ctx context.Context, req tools.ScreeningRequest, skipDeep bool) (tools.ScreeningResult, error) {
 	kind, err := req.ResolveBusinessType()
 	if err != nil {
 		return tools.ScreeningResult{}, err
@@ -134,9 +152,9 @@ func (e *RiskEngine) EvaluateScreeningRequest(ctx context.Context, req tools.Scr
 	}
 	switch kind {
 	case tools.BusinessStock:
-		return e.Orchestrate(ctx, profile, req.StockOrder, opts...)
+		return e.Orchestrate(ctx, profile, req.StockOrder, skipDeep)
 	case tools.BusinessCrossBorder:
-		return e.Orchestrate(ctx, profile, req.Transaction, opts...)
+		return e.Orchestrate(ctx, profile, req.Transaction, skipDeep)
 	default:
 		return tools.ScreeningResult{}, fmt.Errorf("unreachable business kind %q", kind)
 	}

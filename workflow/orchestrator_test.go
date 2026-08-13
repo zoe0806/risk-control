@@ -127,3 +127,45 @@ func TestStockPreAnalyzeTrusted(t *testing.T) {
 		t.Fatalf("bucket=%s", pa.Bucket)
 	}
 }
+
+func TestEvaluateLocalWhitelistAndBan(t *testing.T) {
+	cfg := config.Config{
+		CrossBorder: config.CrossBorderRules{WhitelistKeys: []string{"ACME_CORP"}},
+	}
+	cfg.DeepRuntime.Kind = DeepRuntimeOff
+	eng, err := NewRiskEngine(context.Background(), &GraphDeps{Store: store.Noop{}, Cfg: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := eng.EvaluateLocal(context.Background(), tools.ScreeningRequest{
+		BusinessType: tools.BusinessCrossBorder,
+		Transaction:  tools.CrossBorderTransaction{TransactionID: "t1", Counterparty: "Acme Corp", Country: "US"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Decision != tools.DecisionApprove {
+		t.Fatalf("whitelist got %s", res.Decision)
+	}
+	res2, err := eng.EvaluateLocal(context.Background(), tools.ScreeningRequest{
+		BusinessType: tools.BusinessStock,
+		StockOrder:   tools.StockOrder{OrderID: "o1", Symbol: "300136", Side: "BUY", Quantity: 1, Price: 10},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res2.Decision != tools.DecisionReject || !res2.Blocked {
+		t.Fatalf("stock ban got %+v", res2)
+	}
+}
+
+func TestRuleEngineKeepsPipelineForDeep(t *testing.T) {
+	cfg := config.Config{}
+	pack := packFromConfig(cfg)
+	res := RunRuleEngine(context.Background(), tools.CrossBorderTransaction{
+		TransactionID: "t2", Counterparty: "Unknown Party", Country: "US",
+	}, pack, NewVelocityTracker(), store.Noop{}, true)
+	if res.CB == nil || res.CB.Party == nil {
+		t.Fatalf("expected CB pipeline on EngineResult: %+v", res)
+	}
+}

@@ -4,15 +4,13 @@ import (
 	"context"
 	"sync"
 
-	"github.com/cloudwego/eino/compose"
-
 	"risk_control/config"
 	"risk_control/tools"
 	"risk_control/workflow"
 )
 
-// ScreenConcurrent 批处理推理：限制并发以降低 API 突发成本。
-func ScreenConcurrent(ctx context.Context, run compose.Runnable[tools.ScreeningRequest, tools.ScreeningResult], reqs []tools.ScreeningRequest, opts ...compose.Option) ([]tools.ScreeningResult, []error) {
+// ScreenConcurrent 批处理：限制并发以降低 API 突发成本。
+func ScreenConcurrent(ctx context.Context, eng *workflow.RiskEngine, reqs []tools.ScreeningRequest) ([]tools.ScreeningResult, []error) {
 	workers := config.Load().Workers
 	if workers < 1 {
 		workers = 1
@@ -26,8 +24,7 @@ func ScreenConcurrent(ctx context.Context, run compose.Runnable[tools.ScreeningR
 		go func() {
 			defer wg.Done()
 			for idx := range ch {
-				invokeCtx, _ := workflow.WithRunTrace(ctx)
-				r, err := run.Invoke(invokeCtx, reqs[idx], opts...)
+				r, err := eng.EvaluateScreeningRequest(ctx, reqs[idx])
 				if err != nil {
 					errs[idx] = err
 					continue

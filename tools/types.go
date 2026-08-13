@@ -61,8 +61,8 @@ func (r ScreeningRequest) ValidatePayload(kind string) error {
 		if strings.TrimSpace(r.StockOrder.Symbol) == "" {
 			return fmt.Errorf("stock_order.symbol is required")
 		}
-		if r.Transaction.TransactionID == "" {
-			return fmt.Errorf("transaction.transaction_id is required")
+		if strings.TrimSpace(r.StockOrder.OrderID) == "" {
+			return fmt.Errorf("stock_order.order_id is required")
 		}
 		return nil
 	case BusinessCrossBorder:
@@ -111,27 +111,28 @@ type ScreeningResult struct {
 	ReportMarkdown     string               `json:"report_markdown"`
 	TotalDurationMs    int64                `json:"total_duration_ms"`
 	PersistedAuditRows int                  `json:"persisted_audit_rows"`
+	DeepRuntime        string               `json:"deep_runtime,omitempty"`
 }
 
 // EngineTrace 单引擎执行摘要（可观测 / 仲裁审计）。
 type EngineTrace struct {
-	Engine     string   `json:"engine"`
-	Decision   string   `json:"decision,omitempty"`
-	Score      float64  `json:"score"`
-	PolicyIDs  []string `json:"policy_ids,omitempty"`
-	LatencyMs  int64    `json:"latency_ms"`
-	Degraded   bool     `json:"degraded,omitempty"`
-	Rationale  string   `json:"rationale,omitempty"`
+	Engine    string   `json:"engine"`
+	Decision  string   `json:"decision,omitempty"`
+	Score     float64  `json:"score"`
+	PolicyIDs []string `json:"policy_ids,omitempty"`
+	LatencyMs int64    `json:"latency_ms"`
+	Degraded  bool     `json:"degraded,omitempty"`
+	Rationale string   `json:"rationale,omitempty"`
 }
 
 // ShadowCompare 影子策略对比（不影响主决策）。
 type ShadowCompare struct {
-	Enabled        bool   `json:"enabled"`
-	PackVersion    string `json:"pack_version,omitempty"`
-	ShadowDecision string `json:"shadow_decision,omitempty"`
+	Enabled         bool   `json:"enabled"`
+	PackVersion     string `json:"pack_version,omitempty"`
+	ShadowDecision  string `json:"shadow_decision,omitempty"`
 	PrimaryDecision string `json:"primary_decision,omitempty"`
-	Differ         bool   `json:"differ"`
-	Detail         string `json:"detail,omitempty"`
+	Differ          bool   `json:"differ"`
+	Detail          string `json:"detail,omitempty"`
 }
 
 // ReviewCase 人工复核案例（阶段2）。

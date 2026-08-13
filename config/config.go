@@ -37,35 +37,51 @@ type Config struct {
 	CrossBorder CrossBorderRules `json:"crossBorder"`
 
 	// Orchestrator 阶段3/4 多引擎编排（也可被 policies 热更新覆盖）。
-	Orchestrator OrchestratorConfig `json:"orchestrator"`
-	PolicyPackPath string           `json:"policyPackPath"` // 兼容：默认跨境主包
-	ShadowPackPath string           `json:"shadowPackPath"`
+	Orchestrator   OrchestratorConfig `json:"orchestrator"`
+	PolicyPackPath string             `json:"policyPackPath"` // 兼容：默认跨境主包
+	ShadowPackPath string             `json:"shadowPackPath"`
 	// DomainPolicies 按业务线配置主/影子策略包（优先于上面的兼容字段）。
 	DomainPolicies map[string]DomainPolicyPaths `json:"domainPolicies"`
+
+	// DeepRuntime 深度执行器：native | eino | cli | codex | off。不会自动发现本机 Codex，需把 kind 设为 codex。
+	DeepRuntime DeepRuntimeConfig `json:"deepRuntime"`
+}
+
+// DeepRuntimeConfig 可插拔深度 runtime。kind=cli 须遵守 risk.deep.v1；kind=codex 调用本机 `codex exec`。
+type DeepRuntimeConfig struct {
+	Kind string        `json:"kind"` // native | eino | cli | codex | off
+	CLI  DeepCLIConfig `json:"cli"`
+}
+
+// DeepCLIConfig 外部 CLI。kind=cli 时 command 必填；kind=codex 时 command 默认 "codex"。
+type DeepCLIConfig struct {
+	Command   string   `json:"command"`
+	Args      []string `json:"args"`
+	TimeoutMs int      `json:"timeoutMs"`
 }
 
 // OrchestratorConfig 预分析路由 / 深度超时 / 熔断 / 影子。
 type OrchestratorConfig struct {
-	DeepTimeoutMs           int  `json:"deepTimeoutMs"`
-	CircuitFailureThreshold int  `json:"circuitFailureThreshold"`
-	CircuitOpenSec          int  `json:"circuitOpenSec"`
-	ShadowEnabled           bool `json:"shadowEnabled"`
-	AsyncCaseDraft          bool `json:"asyncCaseDraft"`
+	DeepTimeoutMs           int     `json:"deepTimeoutMs"`
+	CircuitFailureThreshold int     `json:"circuitFailureThreshold"`
+	CircuitOpenSec          int     `json:"circuitOpenSec"`
+	ShadowEnabled           bool    `json:"shadowEnabled"`
+	AsyncCaseDraft          bool    `json:"asyncCaseDraft"`
 	LightReviewThreshold    float64 `json:"lightReviewThreshold"`
 	LightRejectThreshold    float64 `json:"lightRejectThreshold"`
-	GraphSharedDeviceReview int  `json:"graphSharedDeviceReview"`
-	GraphClusterReject      int  `json:"graphClusterReject"`
+	GraphSharedDeviceReview int     `json:"graphSharedDeviceReview"`
+	GraphClusterReject      int     `json:"graphClusterReject"`
 }
 
 // LightMLWeights 轻量线性模型权重（演示用，可热更新）。
 type LightMLWeights struct {
-	Bias             float64 `json:"bias"`
-	Amount           float64 `json:"amount"`
-	CountryHighRisk  float64 `json:"countryHighRisk"`
-	CountryBlocked   float64 `json:"countryBlocked"`
-	NameTokens       float64 `json:"nameTokens"`
-	PurposeLen       float64 `json:"purposeLen"`
-	GraphCluster     float64 `json:"graphCluster"`
+	Bias            float64 `json:"bias"`
+	Amount          float64 `json:"amount"`
+	CountryHighRisk float64 `json:"countryHighRisk"`
+	CountryBlocked  float64 `json:"countryBlocked"`
+	NameTokens      float64 `json:"nameTokens"`
+	PurposeLen      float64 `json:"purposeLen"`
+	GraphCluster    float64 `json:"graphCluster"`
 }
 
 // Orch 返回带默认值的编排配置。
@@ -110,18 +126,18 @@ func DefaultLightWeights() LightMLWeights {
 
 // CrossBorderRules 跨境本地漏斗与名单精排参数。
 type CrossBorderRules struct {
-	WhitelistKeys       []string `json:"whitelistKeys"`
-	BlacklistKeys       []string `json:"blacklistKeys"`
-	BlockedCountries    []string `json:"blockedCountries"`
-	HighRiskCountries   []string `json:"highRiskCountries"`
-	MaxAmountMinorUnit  int64    `json:"maxAmountMinorUnit"` // 0=不启用金额硬限
-	VelocityWindowSec   int      `json:"velocityWindowSec"`
-	VelocityMaxCount    int      `json:"velocityMaxCount"`
-	FuzzyMatchMinScore  float64  `json:"fuzzyMatchMinScore"`  // 候选保留下限
-	SkipAIBelowScore    float64  `json:"skipAIBelowScore"`    // 最佳匹配低于此则跳过 LLM 放行
-	AutoRejectAboveScore float64 `json:"autoRejectAboveScore"` // 最佳匹配高于此则本地 REJECT
-	CacheTTLSec         int      `json:"cacheTTLSec"`
-	CandidateLimit      int      `json:"candidateLimit"`
+	WhitelistKeys        []string `json:"whitelistKeys"`
+	BlacklistKeys        []string `json:"blacklistKeys"`
+	BlockedCountries     []string `json:"blockedCountries"`
+	HighRiskCountries    []string `json:"highRiskCountries"`
+	MaxAmountMinorUnit   int64    `json:"maxAmountMinorUnit"` // 0=不启用金额硬限
+	VelocityWindowSec    int      `json:"velocityWindowSec"`
+	VelocityMaxCount     int      `json:"velocityMaxCount"`
+	FuzzyMatchMinScore   float64  `json:"fuzzyMatchMinScore"`   // 候选保留下限
+	SkipAIBelowScore     float64  `json:"skipAIBelowScore"`     // 最佳匹配低于此则跳过 LLM 放行
+	AutoRejectAboveScore float64  `json:"autoRejectAboveScore"` // 最佳匹配高于此则本地 REJECT
+	CacheTTLSec          int      `json:"cacheTTLSec"`
+	CandidateLimit       int      `json:"candidateLimit"`
 }
 
 // CBRules 返回带默认值的跨境规则副本。

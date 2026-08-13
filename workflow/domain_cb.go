@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/cloudwego/eino/compose"
-
 	"risk_control/tools"
 )
 
@@ -52,14 +50,6 @@ func (crossBorderProfile) NeedDeep(pre PreAnalysis, rule EngineResult, arbDecisi
 		return true
 	}
 	return !rule.SkipAI
-}
-
-func (crossBorderProfile) InvokeDeep(ctx context.Context, e *RiskEngine, req any, opts []compose.Option) (tools.ScreeningResult, error) {
-	txn, err := asCB(req)
-	if err != nil {
-		return tools.ScreeningResult{}, err
-	}
-	return e.cbGraph.Invoke(ctx, txn, opts...)
 }
 
 func (crossBorderProfile) ShadowLocal(ctx context.Context, e *RiskEngine, shadow *PolicyPack, req any) (string, string) {

@@ -50,8 +50,7 @@ func Screen(w http.ResponseWriter, r *http.Request, eng *workflow.RiskEngine) {
 		return
 	}
 	t0 := time.Now()
-	invokeCtx, _ := workflow.WithRunTrace(r.Context())
-	res, err := eng.EvaluateScreeningRequest(invokeCtx, req, workflow.InvokeScreeningOptions()...)
+	res, err := eng.EvaluateScreeningRequest(r.Context(), req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

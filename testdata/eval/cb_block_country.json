@@ -1,0 +1,9 @@
+{
+  "business_type": "cross_border",
+  "transaction": {
+    "transaction_id": "t-block-kp",
+    "counterparty": "Someone Ltd",
+    "country": "KP",
+    "amount_minor_unit": 1000
+  }
+}

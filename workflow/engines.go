@@ -28,6 +28,10 @@ type EngineResult struct {
 	BlockReason    string
 	// 跨境深度路由辅助
 	SkipAI bool
+
+	// 内核已算完的流水线状态，深度 runtime 必须复用，禁止再跑本地闸门/名单检索。
+	CB    *tools.PipelineState
+	Stock *tools.StockPipelineState
 }
 
 func (r EngineResult) Trace() tools.EngineTrace {
@@ -57,6 +61,7 @@ func engineFromPipeline(ps *tools.PipelineState, early bool, rationale string, t
 		ReportMarkdown: ps.ReportMarkdown,
 		Audit:          ps.Audit,
 		SkipAI:         ps.Gate != nil && ps.Gate.SkipAI,
+		CB:             ps,
 	}
 }
 
@@ -94,6 +99,7 @@ func RunRuleEngine(ctx context.Context, txn tools.CrossBorderTransaction, pack *
 				Degraded:  true,
 				TraceID:   ps.TraceID,
 				Audit:     ps.Audit,
+				CB:        ps,
 			}
 		}
 		ps.Candidates = tools.RankCandidates(party, hits, rules.FuzzyMatchMinScore, rules.CandidateLimit)
@@ -105,16 +111,17 @@ func RunRuleEngine(ctx context.Context, txn tools.CrossBorderTransaction, pack *
 		}
 	}
 	return EngineResult{
-		Engine:    tools.EngineRule,
-		Decision:  tools.DecisionReview,
-		Score:     maxFloat(ps.Gate.LocalRiskScore, 0.35),
-		PolicyIDs: append([]string{}, ps.PolicyIDs...),
-		Rationale: "rule_needs_deeper",
-		LatencyMs: time.Since(t0).Milliseconds(),
-		TraceID:   ps.TraceID,
+		Engine:      tools.EngineRule,
+		Decision:    tools.DecisionReview,
+		Score:       maxFloat(ps.Gate.LocalRiskScore, 0.35),
+		PolicyIDs:   append([]string{}, ps.PolicyIDs...),
+		Rationale:   "rule_needs_deeper",
+		LatencyMs:   time.Since(t0).Milliseconds(),
+		TraceID:     ps.TraceID,
 		ListVersion: ps.ListVersion,
-		Audit:     ps.Audit,
-		SkipAI:    false,
+		Audit:       ps.Audit,
+		SkipAI:      false,
+		CB:          ps,
 	}
 }
 

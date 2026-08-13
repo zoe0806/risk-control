@@ -1,0 +1,11 @@
+{
+  "business_type": "stock",
+  "stock_order": {
+    "order_id": "o-ban-1",
+    "symbol": "300136",
+    "side": "BUY",
+    "quantity": 100,
+    "price": 10,
+    "account_id": "acct-1"
+  }
+}

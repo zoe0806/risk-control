@@ -1,0 +1,9 @@
+{
+  "business_type": "cross_border",
+  "transaction": {
+    "transaction_id": "t-whitelist-1",
+    "counterparty": "Acme Corp",
+    "country": "US",
+    "amount_minor_unit": 10000
+  }
+}
